@@ -74,6 +74,41 @@
   };
 
   /**
+   * Monkey-patch XMLHttpRequest to intercept older XHR polling requests.
+   */
+  const originalXHR = window.XMLHttpRequest;
+  (window as any).XMLHttpRequest = function () {
+    const xhr = new originalXHR();
+    const originalOpen = xhr.open;
+    const originalSend = xhr.send;
+    let requestUrl = '';
+
+    xhr.open = function (method: string, url: string | URL, ...args: any[]) {
+      requestUrl = typeof url === 'string' ? url : (url as URL).href;
+      return originalOpen.apply(this, [method, url, ...args] as any);
+    };
+
+    xhr.send = function (body?: any) {
+      xhr.addEventListener('load', function () {
+        try {
+          const submissionMatch = requestUrl.match(SUBMISSION_CHECK_PATTERN);
+          if (submissionMatch && xhr.status === 200) {
+            const data = JSON.parse(xhr.responseText);
+            if (data && data.state === 'SUCCESS') {
+              handleSubmissionResponse(data, submissionMatch[1]);
+            }
+          }
+        } catch (e) {
+          // Silently ignore XHR response parse errors
+        }
+      });
+      return originalSend.apply(this, [body]);
+    };
+
+    return xhr;
+  };
+
+  /**
    * Handle a submission check API response (/submissions/detail/{id}/check/).
    */
   function handleSubmissionResponse(data: any, submissionId: string): void {
