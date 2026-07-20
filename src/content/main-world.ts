@@ -47,10 +47,7 @@
 
       // Debug log for every intercepted request to help diagnose the LeetCode query
       if (url.includes('/graphql') || url.includes('/submissions/')) {
-        const queryName = body.includes('operationName') 
-          ? (body.match(/"operationName"\s*:\s*"([^"]+)"/) || [])[1] 
-          : 'non-graphql';
-        console.log(`[LeetSync Interceptor] Intercepted request: URL=${url}, operationName=${queryName || 'unknown'}`);
+        console.log(`[LeetSync Interceptor] Intercepted request: URL=${url}, body=${body.substring(0, 300)}`);
       }
 
       // Check if this is a submission check response
@@ -105,7 +102,8 @@
       xhr.addEventListener('load', function () {
         try {
           if (requestUrl.includes('/graphql') || requestUrl.includes('/submissions/')) {
-            console.log(`[LeetSync Interceptor] XHR request loaded: URL=${requestUrl}, status=${xhr.status}`);
+            const bodyStr = typeof body === 'string' ? body : '';
+            console.log(`[LeetSync Interceptor] XHR request loaded: URL=${requestUrl}, status=${xhr.status}, body=${bodyStr.substring(0, 300)}`);
           }
           const submissionMatch = requestUrl.match(SUBMISSION_CHECK_PATTERN);
           if (submissionMatch && xhr.status === 200) {
@@ -113,6 +111,16 @@
             const data = JSON.parse(xhr.responseText);
             if (data && data.state === 'SUCCESS') {
               handleSubmissionResponse(data, submissionMatch[1]);
+            }
+          }
+
+          // Check if this is a GraphQL submissionDetails query in XHR
+          const bodyStr = typeof body === 'string' ? body : '';
+          if (requestUrl.includes(GRAPHQL_URL) && bodyStr.includes('submissionDetails') && xhr.status === 200) {
+            console.log('[LeetSync Interceptor] Found submissionDetails GraphQL query in XHR!');
+            const responseData = JSON.parse(xhr.responseText);
+            if (responseData?.data?.submissionDetails) {
+              handleGraphQLSubmission(responseData.data.submissionDetails);
             }
           }
         } catch (e) {
@@ -135,15 +143,17 @@
     // Only process completed submissions
     if (data.status_display !== 'Accepted' && !data.status_display) return;
 
+    const code = data.code ?? data.typed_code ?? extractCodeFromEditor();
+
     const submission = {
       submissionId,
-      titleSlug: data.question_id ? extractSlugFromPage() : '',
+      titleSlug: extractSlugFromPage(), // Use URL slug instead of matching question_id
       title: extractTitleFromPage(),
       questionNumber: 0, // Will be enriched later
       difficulty: '' as any,
       tags: [] as string[],
       language: data.lang ?? '',
-      code: data.code ?? data.typed_code ?? '',
+      code: code,
       status: data.status_display ?? 'Unknown',
       runtime: data.status_runtime ?? '',
       runtimePercentile: data.runtime_percentile ?? 0,
@@ -153,11 +163,16 @@
       url: window.location.href,
     };
 
-    if (!submission.code || !submission.language) {
+    if (!submission.code) {
+      console.warn('[LeetSync] Intercepted submission but could not extract code from page.');
+      return;
+    }
+    if (!submission.language) {
+      console.warn('[LeetSync] Intercepted submission but could not determine language.');
       return;
     }
 
-    console.log('[LeetSync] Submission captured:', submission);
+    console.log('[LeetSync] Submission captured successfully:', submission);
     window.postMessage({ type: 'LEETSYNC_SUBMISSION', data: submission }, '*');
   }
 
@@ -195,6 +210,28 @@
 
     console.log('[LeetSync] GraphQL submission captured:', submission);
     window.postMessage({ type: 'LEETSYNC_SUBMISSION', data: submission }, '*');
+  }
+
+  function extractCodeFromEditor(): string {
+    try {
+      const monaco = (window as any).monaco;
+      if (monaco && typeof monaco.editor?.getModels === 'function') {
+        const models = monaco.editor.getModels();
+        if (models && models.length > 0) {
+          return models[0].getValue() || '';
+        }
+      }
+    } catch (e) {}
+
+    // Fallback: DOM lines
+    try {
+      const codeLines = document.querySelectorAll('.view-line');
+      if (codeLines && codeLines.length > 0) {
+        return Array.from(codeLines).map(line => line.textContent || '').join('\n');
+      }
+    } catch (e) {}
+
+    return '';
   }
 
   function extractSlugFromPage(): string {
