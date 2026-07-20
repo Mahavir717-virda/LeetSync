@@ -11,7 +11,7 @@
   "host_permissions": [
     "https://leetcode.com/*",
     "https://api.github.com/*",
-    "https://leetsync-auth.vercel.app/*"
+    "https://leet-sync.vercel.app/*"
   ],
   "background": {
     "service_worker": "src/background/index.ts",

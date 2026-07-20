@@ -8,8 +8,10 @@ export const EXTENSION_VERSION = '1.0.0';
 
 /** GitHub OAuth configuration */
 export const GITHUB_CLIENT_ID = 'Ov23lizKSjgAL8yjQnfp'; // Replace with actual client ID
+export const GITHUB_CLIENT_SECRET = '42f8c0da8a1c72ddbd60245bd678ef9a17332ba7'; // Replace with actual client ID
+
 export const GITHUB_OAUTH_URL = 'https://github.com/login/oauth/authorize';
-export const GITHUB_TOKEN_EXCHANGE_URL = 'https://leetsync-auth.vercel.app/api/exchange'; // Serverless proxy
+export const GITHUB_TOKEN_EXCHANGE_URL = 'https://leet-sync.vercel.app/api/exchange'; // Serverless proxy
 export const GITHUB_API_BASE = 'https://api.github.com';
 export const GITHUB_OAUTH_SCOPES = 'repo';
 
