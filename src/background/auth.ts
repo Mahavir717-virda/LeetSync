@@ -8,6 +8,7 @@
 
 import {
   GITHUB_CLIENT_ID,
+  GITHUB_CLIENT_SECRET,
   GITHUB_OAUTH_URL,
   GITHUB_TOKEN_EXCHANGE_URL,
   GITHUB_OAUTH_SCOPES,
@@ -64,20 +65,50 @@ export async function loginWithOAuth(): Promise<{ success: boolean; error?: stri
       return { success: false, error: 'State mismatch — possible CSRF attack' };
     }
 
-    // Exchange the code for an access token via serverless proxy
-    const tokenResponse = await fetch(GITHUB_TOKEN_EXCHANGE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, state }),
-    });
+    let accessToken = '';
 
-    if (!tokenResponse.ok) {
-      const errorData = await tokenResponse.json().catch(() => ({}));
-      return { success: false, error: `Token exchange failed: ${errorData.message ?? tokenResponse.statusText}` };
+    // If a client secret is specified in constants, perform direct client-side exchange
+    if (GITHUB_CLIENT_SECRET && (GITHUB_CLIENT_SECRET as string) !== 'YOUR_GITHUB_CLIENT_SECRET') {
+      console.log('[LeetSync Auth] Performing direct client-side token exchange');
+      const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        },
+        body: JSON.stringify({
+          client_id: GITHUB_CLIENT_ID,
+          client_secret: GITHUB_CLIENT_SECRET,
+          code,
+        }),
+      });
+
+      if (!tokenResponse.ok) {
+        return { success: false, error: `Direct token exchange failed: ${tokenResponse.statusText}` };
+      }
+
+      const tokenData = await tokenResponse.json();
+      if (tokenData.error) {
+        return { success: false, error: `Direct token exchange error: ${tokenData.error_description || tokenData.error}` };
+      }
+      accessToken = tokenData.access_token;
+    } else {
+      // Fall back to serverless proxy
+      console.log('[LeetSync Auth] Performing serverless proxy token exchange');
+      const tokenResponse = await fetch(GITHUB_TOKEN_EXCHANGE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, state }),
+      });
+
+      if (!tokenResponse.ok) {
+        const errorData = await tokenResponse.json().catch(() => ({}));
+        return { success: false, error: `Proxy token exchange failed: ${errorData.message ?? tokenResponse.statusText}` };
+      }
+
+      const tokenData = await tokenResponse.json();
+      accessToken = tokenData.access_token;
     }
-
-    const tokenData = await tokenResponse.json();
-    const accessToken = tokenData.access_token;
 
     if (!accessToken) {
       return { success: false, error: 'No access token received from token exchange' };

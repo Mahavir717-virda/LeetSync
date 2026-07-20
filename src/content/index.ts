@@ -2,8 +2,8 @@
  * LeetSync Content Script
  *
  * Runs on leetcode.com/problems/* pages.
- * Injects the network interceptor into the page context and
- * relays detected submissions to the background service worker.
+ * Listens for submission details captured by our main-world script,
+ * and forwards them to the background service worker.
  */
 
 import { MessageType } from '@/utils/constants';
@@ -12,11 +12,9 @@ import type { LeetCodeSubmission } from '@/types';
 console.log('[LeetSync] Content script loaded on:', window.location.href);
 
 /**
- * Listen for messages from the injected page-context script.
- * The injector posts submission data via window.postMessage.
+ * Listen for messages from our main-world script.
  */
 window.addEventListener('message', (event) => {
-  // Only accept messages from the same window (our injected script)
   if (event.source !== window) return;
 
   const { type, data } = event.data ?? {};
@@ -36,21 +34,3 @@ window.addEventListener('message', (event) => {
     }
   );
 });
-
-/**
- * Inject the network interceptor script into the page context.
- * This runs in the MAIN world (not the content script isolated world),
- * so it can monkey-patch window.fetch and XMLHttpRequest.
- */
-function injectInterceptor(): void {
-  const script = document.createElement('script');
-  script.src = chrome.runtime.getURL('inject.js');
-  (document.head || document.documentElement).appendChild(script);
-  script.onload = () => {
-    script.remove();
-    console.log('[LeetSync] Interceptor injected into page context');
-  };
-}
-
-// Inject as early as possible (run_at: document_start)
-injectInterceptor();
