@@ -63,20 +63,23 @@ export async function syncSubmission(
   const repo = settings.repoName;
 
   try {
+    console.log(`[LeetSync Sync] 🚀 Starting sync pipeline for: "${submission.title}" (Language: ${submission.language})`);
+
     // ─── Step 1: Fetch or create manifest ──────────────────────
     const manifestPath = buildManifestPath(submission.questionNumber, submission.titleSlug);
     let manifest: ProblemManifest;
     let manifestSha: string | undefined;
 
+    console.log(`[LeetSync Sync] [Step 1/5] Fetching existing manifest from GitHub: ${manifestPath}`);
     const existingManifest = await githubApi.getFileContent(token, owner, repo, manifestPath);
 
     if (existingManifest?.content) {
-      // Parse existing manifest
+      console.log(`[LeetSync Sync] [Step 1/5] Manifest found on GitHub. Parsing content...`);
       const decoded = githubApi.decodeFileContent(existingManifest.content);
       manifest = JSON.parse(decoded) as ProblemManifest;
       manifestSha = existingManifest.sha;
     } else {
-      // Create new manifest
+      console.log(`[LeetSync Sync] [Step 1/5] No manifest found. Initializing a new manifest.`);
       manifest = createManifest(submission);
     }
 
@@ -85,6 +88,7 @@ export async function syncSubmission(
       (s) => s.language === submission.language
     );
     const versionNumber = existingInSameLang.length + 1;
+    console.log(`[LeetSync Sync] [Step 2/5] Computed next version number: v${versionNumber}`);
 
     // ─── Step 3: Generate versioned filename and push code ─────
     const filename = generateVersionedFilename(
@@ -102,6 +106,7 @@ export async function syncSubmission(
 
     const commitMessage = `${submission.title}: v${versionNumber} ${submission.status.toLowerCase()} (${getLanguageName(submission.language)}, ${submission.runtime})`;
 
+    console.log(`[LeetSync Sync] [Step 3/5] Pushing versioned solution code: ${filePath}`);
     const fileResult = await githubApi.createOrUpdateFile(
       token,
       owner,
@@ -110,6 +115,7 @@ export async function syncSubmission(
       submission.code,
       commitMessage
     );
+    console.log(`[LeetSync Sync] [Step 3/5] Solution code pushed! Commit SHA: ${fileResult.commit.sha}`);
 
     // ─── Step 4: Update manifest ───────────────────────────────
     const newEntry: ManifestSubmission = {
@@ -128,6 +134,7 @@ export async function syncSubmission(
     const updatedManifest = updateManifest(manifest, newEntry);
     const manifestContent = JSON.stringify(updatedManifest, null, 2);
 
+    console.log(`[LeetSync Sync] [Step 4/5] Pushing updated manifest.json to GitHub...`);
     await githubApi.createOrUpdateFile(
       token,
       owner,
@@ -137,12 +144,15 @@ export async function syncSubmission(
       `Update manifest: ${submission.title} v${versionNumber}`,
       manifestSha
     );
+    console.log(`[LeetSync Sync] [Step 4/5] Manifest updated successfully.`);
 
     // ─── Step 5: Update per-problem README ─────────────────────
     const readmePath = buildReadmePath(submission.questionNumber, submission.titleSlug);
+    console.log(`[LeetSync Sync] [Step 5/5] Checking existing README: ${readmePath}`);
     const existingReadme = await githubApi.getFileContent(token, owner, repo, readmePath);
     const readmeContent = generateProblemReadme(updatedManifest);
 
+    console.log(`[LeetSync Sync] [Step 5/5] Pushing updated README.md to GitHub...`);
     await githubApi.createOrUpdateFile(
       token,
       owner,
@@ -152,6 +162,7 @@ export async function syncSubmission(
       `Update README: ${submission.title}`,
       existingReadme?.sha
     );
+    console.log(`[LeetSync Sync] [Step 5/5] README.md updated successfully.`);
 
     // ─── Step 6: Record success ────────────────────────────────
     await addSubmissionHash(hash);

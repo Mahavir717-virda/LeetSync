@@ -28,7 +28,22 @@
     const response = await originalFetch.apply(this, args);
 
     try {
-      const url = typeof args[0] === 'string' ? args[0] : (args[0] as Request).url;
+      let url = '';
+      let body = '';
+
+      if (args[0] instanceof Request) {
+        url = args[0].url;
+        try {
+          const clonedReq = args[0].clone();
+          body = await clonedReq.text();
+        } catch (_) {}
+      } else {
+        url = typeof args[0] === 'string' ? args[0] : '';
+        const options = args[1];
+        if (options && options.body) {
+          body = typeof options.body === 'string' ? options.body : '';
+        }
+      }
 
       // Check if this is a submission check response
       const submissionMatch = url.match(SUBMISSION_CHECK_PATTERN);
@@ -42,16 +57,13 @@
       }
 
       // Check if this is a GraphQL submissionDetails query
-      if (url.includes(GRAPHQL_URL) && args[1]?.body) {
-        const body = typeof args[1].body === 'string' ? args[1].body : '';
-        if (body.includes('submissionDetails')) {
-          const cloned = response.clone();
-          cloned.json().then((data: any) => {
-            if (data?.data?.submissionDetails) {
-              handleGraphQLSubmission(data.data.submissionDetails);
-            }
-          }).catch(() => { /* ignore parse errors */ });
-        }
+      if (url.includes(GRAPHQL_URL) && body.includes('submissionDetails')) {
+        const cloned = response.clone();
+        cloned.json().then((data: any) => {
+          if (data?.data?.submissionDetails) {
+            handleGraphQLSubmission(data.data.submissionDetails);
+          }
+        }).catch(() => { /* ignore parse errors */ });
       }
     } catch (e) {
       // Never break the page — silently ignore interceptor errors
