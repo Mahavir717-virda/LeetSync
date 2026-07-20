@@ -59,7 +59,7 @@
           if (data && data.state === 'SUCCESS') {
             handleSubmissionResponse(data, submissionMatch[1]);
           }
-        }).catch(() => { /* ignore parse errors */ });
+        }).catch((e) => console.error('[LeetSync] Error parsing submission check:', e));
       }
 
       // Check if this is a GraphQL submissionDetails query
@@ -68,9 +68,9 @@
         const cloned = response.clone();
         cloned.json().then((data: any) => {
           if (data?.data?.submissionDetails) {
-            handleGraphQLSubmission(data.data.submissionDetails);
+            handleGraphQLSubmission(data.data.submissionDetails, body);
           }
-        }).catch(() => { /* ignore parse errors */ });
+        }).catch((e) => console.error('[LeetSync] Error parsing GraphQL details:', e));
       }
     } catch (e) {
       // Never break the page — silently ignore interceptor errors
@@ -99,8 +99,19 @@
     };
 
     xhr.send = function (body?: any) {
-      xhr.addEventListener('load', function () {
+      xhr.addEventListener('load', async function () {
         try {
+          let responseText = '';
+          if (xhr.responseType === 'blob') {
+            responseText = await (xhr.response as Blob).text();
+          } else if (xhr.responseType === 'json') {
+            responseText = JSON.stringify(xhr.response);
+          } else if (xhr.responseType === 'arraybuffer') {
+            responseText = new TextDecoder('utf-8').decode(xhr.response);
+          } else {
+            responseText = xhr.responseText;
+          }
+
           if (requestUrl.includes('/graphql') || requestUrl.includes('/submissions/')) {
             const bodyStr = typeof body === 'string' ? body : '';
             console.log(`[LeetSync Interceptor] XHR request loaded: URL=${requestUrl}, status=${xhr.status}, body=${bodyStr.substring(0, 300)}`);
@@ -108,7 +119,7 @@
           const submissionMatch = requestUrl.match(SUBMISSION_CHECK_PATTERN);
           if (submissionMatch && xhr.status === 200) {
             console.log(`[LeetSync Interceptor] Found submission check XHR request for ID: ${submissionMatch[1]}`);
-            const data = JSON.parse(xhr.responseText);
+            const data = JSON.parse(responseText);
             if (data && data.state === 'SUCCESS') {
               handleSubmissionResponse(data, submissionMatch[1]);
             }
@@ -118,13 +129,14 @@
           const bodyStr = typeof body === 'string' ? body : '';
           if (requestUrl.includes(GRAPHQL_URL) && bodyStr.includes('submissionDetails') && xhr.status === 200) {
             console.log('[LeetSync Interceptor] Found submissionDetails GraphQL query in XHR!');
-            const responseData = JSON.parse(xhr.responseText);
+            const responseData = JSON.parse(responseText);
             if (responseData?.data?.submissionDetails) {
-              handleGraphQLSubmission(responseData.data.submissionDetails);
+              handleGraphQLSubmission(responseData.data.submissionDetails, bodyStr);
             }
           }
         } catch (e) {
-          // Silently ignore XHR response parse errors
+          // Do not silently ignore! Print the error so we can debug!
+          console.error('[LeetSync] Error in XHR interceptor:', e);
         }
       });
       return originalSend.apply(this, [body]);
@@ -133,59 +145,105 @@
     return xhr;
   };
 
+  const pendingSubmissions = new Map<string, any>();
+
+  function mergeAndSendSubmission(submissionId: string, partialData: any) {
+    if (seenSubmissions.has(submissionId)) return;
+
+    let sub = pendingSubmissions.get(submissionId) || { submissionId, tags: [], url: window.location.href };
+    
+    // Intelligently merge non-empty values
+    for (const key of Object.keys(partialData)) {
+      const val = partialData[key];
+      if (val !== undefined && val !== null && val !== '') {
+        sub[key] = val;
+      }
+    }
+    
+    pendingSubmissions.set(submissionId, sub);
+    console.log(`[LeetSync Debug] Merged submission state for ${submissionId}:`, sub);
+
+    // If we have the minimum required fields to sync, send it to the background!
+    if (sub.code && sub.status && sub.language) {
+      seenSubmissions.add(submissionId);
+      pendingSubmissions.delete(submissionId);
+      console.log('[LeetSync] Submission captured successfully:', sub);
+      window.postMessage({ type: 'LEETSYNC_SUBMISSION', data: sub }, '*');
+    } else {
+      console.log(`[LeetSync Debug] Waiting for more data. Missing: code=${!sub.code}, status=${!sub.status}, language=${!sub.language}`);
+    }
+  }
+
   /**
    * Handle a submission check API response (/submissions/detail/{id}/check/).
    */
   function handleSubmissionResponse(data: any, submissionId: string): void {
     if (seenSubmissions.has(submissionId)) return;
-    seenSubmissions.add(submissionId);
+    
+    console.log(`[LeetSync Debug] /check/ response data for ${submissionId}:`, data);
 
-    // Only process completed submissions
-    if (data.status_display !== 'Accepted' && !data.status_display) return;
+    // Extract status safely from various LeetCode properties
+    let finalStatus = data.status_display || data.status_msg;
+    if (!finalStatus && data.status_code !== undefined) {
+      const codeMap: Record<number, string> = {
+        10: 'Accepted',
+        11: 'Wrong Answer',
+        12: 'Memory Limit Exceeded',
+        13: 'Output Limit Exceeded',
+        14: 'Time Limit Exceeded',
+        15: 'Runtime Error',
+        20: 'Compile Error',
+      };
+      finalStatus = codeMap[data.status_code];
+    }
+
+    // Only process completed submissions (ignore PENDING state where status is missing)
+    if (!finalStatus && data.state !== 'SUCCESS') return;
 
     const code = data.code ?? data.typed_code ?? extractCodeFromEditor();
 
-    const submission = {
-      submissionId,
-      titleSlug: extractSlugFromPage(), // Use URL slug instead of matching question_id
+    mergeAndSendSubmission(submissionId, {
+      titleSlug: extractSlugFromPage(),
       title: extractTitleFromPage(),
       questionNumber: 0, // Will be enriched later
-      difficulty: '' as any,
-      tags: [] as string[],
+      difficulty: '',
       language: data.lang ?? '',
       code: code,
-      status: data.status_display ?? 'Unknown',
+      status: finalStatus,
       runtime: data.status_runtime ?? '',
       runtimePercentile: data.runtime_percentile ?? 0,
       memory: data.status_memory ?? '',
       memoryPercentile: data.memory_percentile ?? 0,
       timestamp: new Date().toISOString(),
-      url: window.location.href,
-    };
-
-    if (!submission.code) {
-      console.warn('[LeetSync] Intercepted submission but could not extract code from page.');
-      return;
-    }
-    if (!submission.language) {
-      console.warn('[LeetSync] Intercepted submission but could not determine language.');
-      return;
-    }
-
-    console.log('[LeetSync] Submission captured successfully:', submission);
-    window.postMessage({ type: 'LEETSYNC_SUBMISSION', data: submission }, '*');
+    });
   }
 
   /**
    * Handle a GraphQL submissionDetails response.
    */
-  function handleGraphQLSubmission(details: any): void {
-    const submissionId = String(details.id ?? details.submissionId ?? '');
-    if (!submissionId || seenSubmissions.has(submissionId)) return;
-    seenSubmissions.add(submissionId);
+  function handleGraphQLSubmission(details: any, requestBodyStr: string): void {
+    let submissionId = String(details.id ?? details.submissionId ?? '');
+    
+    // Extract submissionId from the request variables if missing from the response
+    if (!submissionId) {
+      try {
+        const requestData = JSON.parse(requestBodyStr);
+        if (requestData?.variables?.submissionId) {
+          submissionId = String(requestData.variables.submissionId);
+        }
+      } catch (e) {
+        // Ignore JSON parse errors for the request body
+      }
+    }
 
-    const submission = {
-      submissionId,
+    if (!submissionId) {
+      console.warn('[LeetSync] Could not extract submissionId from GraphQL response or request body.');
+      return;
+    }
+
+    if (seenSubmissions.has(submissionId)) return;
+
+    mergeAndSendSubmission(submissionId, {
       titleSlug: details.question?.titleSlug ?? extractSlugFromPage(),
       title: details.question?.title ?? extractTitleFromPage(),
       questionNumber: parseInt(details.question?.questionFrontendId ?? '0', 10),
@@ -201,15 +259,7 @@
       timestamp: details.timestamp
         ? new Date(details.timestamp * 1000).toISOString()
         : new Date().toISOString(),
-      url: window.location.href,
-    };
-
-    if (!submission.code || !submission.language) {
-      return;
-    }
-
-    console.log('[LeetSync] GraphQL submission captured:', submission);
-    window.postMessage({ type: 'LEETSYNC_SUBMISSION', data: submission }, '*');
+    });
   }
 
   function extractCodeFromEditor(): string {

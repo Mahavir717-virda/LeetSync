@@ -17,7 +17,7 @@ export function generateVersionedFilename(
   language: string
 ): string {
   const safeDatetime = formatTimestampForFilename(timestamp);
-  const safeStatus = status.toLowerCase().replace(/\s+/g, '-');
+  const safeStatus = status?.toLowerCase().replace(/\s+/g, '-') || 'unknown';
   const ext = getLanguageExtension(language);
   return `v${version}_${safeDatetime}_${safeStatus}${ext}`;
 }
@@ -37,14 +37,14 @@ export function formatTimestampForFilename(isoTimestamp: string): string {
  * Get the file extension for a LeetCode language slug.
  */
 export function getLanguageExtension(language: string): string {
-  return LANGUAGE_EXTENSIONS[language.toLowerCase()] ?? '.txt';
+  return LANGUAGE_EXTENSIONS[language?.toLowerCase()] ?? '.txt';
 }
 
 /**
  * Get the display name for a LeetCode language slug.
  */
 export function getLanguageName(language: string): string {
-  return LANGUAGE_NAMES[language.toLowerCase()] ?? language;
+  return LANGUAGE_NAMES[language?.toLowerCase()] ?? language;
 }
 
 /**
@@ -80,7 +80,7 @@ export function buildSubmissionPath(
   filename: string
 ): string {
   const folder = buildProblemFolder(questionNumber, slug);
-  const langFolder = getLanguageName(language).toLowerCase().replace(/[^a-z0-9+#]/g, '').replace(/\+/g, 'plus').replace(/#/g, 'sharp');
+  const langFolder = getLanguageName(language)?.toLowerCase().replace(/[^a-z0-9+#]/g, '').replace(/\+/g, 'plus').replace(/#/g, 'sharp') || 'unknown';
   return `problems/${folder}/${langFolder}/${filename}`;
 }
 
@@ -119,7 +119,8 @@ export function formatDateForDisplay(isoTimestamp: string): string {
 /**
  * Get a difficulty badge emoji.
  */
-export function difficultyBadge(difficulty: string): string {
+export function difficultyBadge(difficulty?: string): string {
+  if (!difficulty) return '⚪';
   switch (difficulty.toLowerCase()) {
     case 'easy': return '🟢';
     case 'medium': return '🟡';

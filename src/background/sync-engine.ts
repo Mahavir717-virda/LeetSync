@@ -40,14 +40,15 @@ export async function syncSubmission(
 
   // ─── Guard: Auth check ─────────────────────────────────────
   if (!settings.githubToken || !settings.repoOwner || !settings.repoName) {
-    console.warn('[LeetSync Sync] Not authenticated or no repo selected, queueing');
+    console.warn('[BG] No GitHub token or repo selected. Token:', !!settings.githubToken, 'Repo:', settings.repoOwner, '/', settings.repoName);
     await addToQueue(submission);
     return { success: false, error: 'Not authenticated or no repo configured' };
   }
 
   // ─── Guard: Sync mode check ────────────────────────────────
+  console.log('[BG] Sync mode:', settings.syncMode, '| Submission status:', submission.status);
   if (settings.syncMode === 'accepted_only' && submission.status !== 'Accepted') {
-    console.log(`[LeetSync Sync] Skipping non-accepted submission (${submission.status})`);
+    console.log(`[BG] Skipping non-accepted submission (${submission.status})`);
     return { success: true }; // Not an error, just filtered out
   }
 
@@ -64,6 +65,8 @@ export async function syncSubmission(
 
   try {
     console.log(`[LeetSync Sync] 🚀 Starting sync pipeline for: "${submission.title}" (Language: ${submission.language})`);
+    console.log('[BG] Extracting info for GitHub push...');
+    const { titleSlug, language, code, questionNumber } = submission;
 
     // ─── Step 1: Fetch or create manifest ──────────────────────
     const manifestPath = buildManifestPath(submission.questionNumber, submission.titleSlug);
@@ -104,9 +107,10 @@ export async function syncSubmission(
       filename
     );
 
-    const commitMessage = `${submission.title}: v${versionNumber} ${submission.status.toLowerCase()} (${getLanguageName(submission.language)}, ${submission.runtime})`;
+    const commitMessage = `${submission.title}: v${versionNumber} ${submission.status?.toLowerCase() || 'unknown'} (${getLanguageName(submission.language)}, ${submission.runtime})`;
 
     console.log(`[LeetSync Sync] [Step 3/5] Pushing versioned solution code: ${filePath}`);
+    console.log(`[BG] Pushing solution file to GitHub:`, { repo, owner, filePath });
     const fileResult = await githubApi.createOrUpdateFile(
       token,
       owner,
@@ -115,6 +119,7 @@ export async function syncSubmission(
       submission.code,
       commitMessage
     );
+    console.log(`[BG] Solution pushed successfully.`);
     console.log(`[LeetSync Sync] [Step 3/5] Solution code pushed! Commit SHA: ${fileResult.commit.sha}`);
 
     // ─── Step 4: Update manifest ───────────────────────────────
