@@ -19,7 +19,7 @@ export const GITHUB_OAUTH_SCOPES = 'repo';
 export const LEETCODE_BASE_URL = 'https://leetcode.com';
 export const LEETCODE_PROBLEMS_URL = 'https://leetcode.com/problems/';
 export const LEETCODE_GRAPHQL_URL = 'https://leetcode.com/graphql';
-export const LEETCODE_SUBMISSION_CHECK_PATTERN = /\/submissions\/detail\/(\d+)\/check\//;
+export const LEETCODE_SUBMISSION_CHECK_PATTERN = /\/submissions\/detail\/(\d+)\/(?:v2\/)?check\//;
 export const LEETCODE_GRAPHQL_SUBMISSION_PATTERN = /submissionDetails/;
 
 /** GitHub repo structure */

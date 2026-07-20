@@ -14,7 +14,7 @@
   if ((window as any).__LEETSYNC_INJECTED__) return;
   (window as any).__LEETSYNC_INJECTED__ = true;
 
-  const SUBMISSION_CHECK_PATTERN = /\/submissions\/detail\/(\d+)\/check\//;
+  const SUBMISSION_CHECK_PATTERN = /\/submissions\/detail\/(\d+)\/(?:v2\/)?check\//;
   const GRAPHQL_URL = '/graphql';
 
   // Track seen submission IDs to deduplicate
@@ -45,9 +45,18 @@
         }
       }
 
+      // Debug log for every intercepted request to help diagnose the LeetCode query
+      if (url.includes('/graphql') || url.includes('/submissions/')) {
+        const queryName = body.includes('operationName') 
+          ? (body.match(/"operationName"\s*:\s*"([^"]+)"/) || [])[1] 
+          : 'non-graphql';
+        console.log(`[LeetSync Interceptor] Intercepted request: URL=${url}, operationName=${queryName || 'unknown'}`);
+      }
+
       // Check if this is a submission check response
       const submissionMatch = url.match(SUBMISSION_CHECK_PATTERN);
       if (submissionMatch) {
+        console.log(`[LeetSync Interceptor] Found submission check REST request for ID: ${submissionMatch[1]}`);
         const cloned = response.clone();
         cloned.json().then((data: any) => {
           if (data && data.state === 'SUCCESS') {
@@ -58,6 +67,7 @@
 
       // Check if this is a GraphQL submissionDetails query
       if (url.includes(GRAPHQL_URL) && body.includes('submissionDetails')) {
+        console.log('[LeetSync Interceptor] Found submissionDetails GraphQL query!');
         const cloned = response.clone();
         cloned.json().then((data: any) => {
           if (data?.data?.submissionDetails) {
@@ -85,14 +95,21 @@
 
     xhr.open = function (method: string, url: string | URL, ...args: any[]) {
       requestUrl = typeof url === 'string' ? url : (url as URL).href;
+      if (requestUrl.includes('/graphql') || requestUrl.includes('/submissions/')) {
+        console.log(`[LeetSync Interceptor] Intercepted XHR request: URL=${requestUrl}`);
+      }
       return originalOpen.apply(this, [method, url, ...args] as any);
     };
 
     xhr.send = function (body?: any) {
       xhr.addEventListener('load', function () {
         try {
+          if (requestUrl.includes('/graphql') || requestUrl.includes('/submissions/')) {
+            console.log(`[LeetSync Interceptor] XHR request loaded: URL=${requestUrl}, status=${xhr.status}`);
+          }
           const submissionMatch = requestUrl.match(SUBMISSION_CHECK_PATTERN);
           if (submissionMatch && xhr.status === 200) {
+            console.log(`[LeetSync Interceptor] Found submission check XHR request for ID: ${submissionMatch[1]}`);
             const data = JSON.parse(xhr.responseText);
             if (data && data.state === 'SUCCESS') {
               handleSubmissionResponse(data, submissionMatch[1]);
