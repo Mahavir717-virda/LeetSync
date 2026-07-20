@@ -9,13 +9,9 @@ import type { LeetCodeSubmission, ProblemManifest, ManifestSubmission } from '@/
 import { getSettings } from '@/utils/storage';
 import { addRecentSync, addSubmissionHash, hasSubmissionHash } from '@/utils/storage';
 import { submissionHash } from '@/utils/filename';
-import {
-  generateVersionedFilename,
-  buildSubmissionPath,
-  buildManifestPath,
-  buildReadmePath,
-  getLanguageName,
-} from '@/utils/filename';
+import { buildManifestPath, buildReadmePath, buildSubmissionPath, generateVersionedFilename } from '@/utils/filename';
+import { getProblemDirectory } from '@/utils/folder-strategy';
+import { getLanguageName } from '@/utils/filename';
 import { githubApi } from './github-api';
 import { generateProblemReadme } from '@/generators/readme';
 import { createManifest, updateManifest } from '@/generators/manifest';
@@ -67,9 +63,12 @@ export async function syncSubmission(
     console.log(`[LeetSync Sync] 🚀 Starting sync pipeline for: "${submission.title}" (Language: ${submission.language})`);
     console.log('[BG] Extracting info for GitHub push...');
     const { titleSlug, language, code, questionNumber } = submission;
+    
+    // Resolve the base directory based on the user's selected folder structure strategy
+    const baseDirectory = getProblemDirectory(submission, settings.folderStructure || 'Topic');
 
     // ─── Step 1: Fetch or create manifest ──────────────────────
-    const manifestPath = buildManifestPath(submission.questionNumber, submission.titleSlug);
+    const manifestPath = buildManifestPath(baseDirectory);
     let manifest: ProblemManifest;
     let manifestSha: string | undefined;
 
@@ -101,8 +100,7 @@ export async function syncSubmission(
       submission.language
     );
     const filePath = buildSubmissionPath(
-      submission.questionNumber,
-      submission.titleSlug,
+      baseDirectory,
       submission.language,
       filename
     );
@@ -152,7 +150,7 @@ export async function syncSubmission(
     console.log(`[LeetSync Sync] [Step 4/5] Manifest updated successfully.`);
 
     // ─── Step 5: Update per-problem README ─────────────────────
-    const readmePath = buildReadmePath(submission.questionNumber, submission.titleSlug);
+    const readmePath = buildReadmePath(baseDirectory);
     console.log(`[LeetSync Sync] [Step 5/5] Checking existing README: ${readmePath}`);
     const existingReadme = await githubApi.getFileContent(token, owner, repo, readmePath);
     const readmeContent = generateProblemReadme(updatedManifest);

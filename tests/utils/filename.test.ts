@@ -109,14 +109,14 @@ describe('buildProblemFolder', () => {
 
 describe('buildSubmissionPath', () => {
   it('builds the full path', () => {
-    const path = buildSubmissionPath(1, 'two-sum', 'python3', 'v1_2026-07-18T14-32-00_accepted.py');
+    const path = buildSubmissionPath('problems/0001-two-sum', 'python3', 'v1_2026-07-18T14-32-00_accepted.py');
     expect(path).toBe('problems/0001-two-sum/python/v1_2026-07-18T14-32-00_accepted.py');
   });
 });
 
 describe('buildManifestPath', () => {
   it('builds the manifest path', () => {
-    expect(buildManifestPath(1, 'two-sum')).toBe('problems/0001-two-sum/manifest.json');
+    expect(buildManifestPath('problems/0001-two-sum')).toBe('problems/0001-two-sum/manifest.json');
   });
 });
 

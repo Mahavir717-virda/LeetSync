@@ -268,6 +268,30 @@ export function App() {
 
             <div class="setting-row">
               <div>
+                <span class="setting-label">Folder Structure</span>
+                <span class="text-muted text-sm">
+                  How problems are organized in your repo
+                </span>
+              </div>
+              <select
+                class="select"
+                value={settings.folderStructure || 'Topic'}
+                onChange={async (e) => {
+                  const updated = await sendMessage(MessageType.UPDATE_SETTINGS, {
+                    folderStructure: (e.target as HTMLSelectElement).value,
+                  });
+                  setSettings(updated);
+                }}
+              >
+                <option value="Topic">Topic (e.g. Array)</option>
+                <option value="Difficulty">Difficulty (e.g. Easy)</option>
+                <option value="Topic/Difficulty">Topic / Difficulty</option>
+                <option value="Flat">Flat (No folders)</option>
+              </select>
+            </div>
+
+            <div class="setting-row">
+              <div>
                 <span class="setting-label">Notifications</span>
                 <span class="text-muted text-sm">Desktop alerts on sync</span>
               </div>

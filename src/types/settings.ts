@@ -16,6 +16,8 @@ export interface LeetSyncSettings {
   repoName: string | null;
   /** Whether to sync only accepted submissions or all */
   syncMode: SyncMode;
+  /** How to structure the repository folders */
+  folderStructure: FolderStructure;
   /** Whether auto-sync is enabled */
   autoSync: boolean;
   /** Whether to show desktop notifications */
@@ -29,6 +31,8 @@ export interface LeetSyncSettings {
 }
 
 export type SyncMode = 'accepted_only' | 'all_submissions';
+
+export type FolderStructure = 'Flat' | 'Topic' | 'Difficulty' | 'Topic/Difficulty';
 
 export interface StreakData {
   current: number;
@@ -47,6 +51,7 @@ export const DEFAULT_SETTINGS: LeetSyncSettings = {
   repoOwner: null,
   repoName: null,
   syncMode: 'accepted_only',
+  folderStructure: 'Topic/Difficulty',
   autoSync: true,
   notifications: true,
   lastSyncedProblem: null,

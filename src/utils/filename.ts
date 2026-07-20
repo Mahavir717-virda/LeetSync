@@ -61,10 +61,6 @@ export function sanitizeSlug(title: string): string {
     .replace(/^-|-$/g, '');
 }
 
-/**
- * Build the problem folder name with zero-padded number.
- * (1, "two-sum") → "0001-two-sum"
- */
 export function buildProblemFolder(questionNumber: number, slug: string): string {
   const paddedNumber = String(questionNumber).padStart(4, '0');
   return `${paddedNumber}-${slug}`;
@@ -74,30 +70,26 @@ export function buildProblemFolder(questionNumber: number, slug: string): string
  * Build the full path for a submission file in the repo.
  */
 export function buildSubmissionPath(
-  questionNumber: number,
-  slug: string,
+  baseDirectory: string,
   language: string,
   filename: string
 ): string {
-  const folder = buildProblemFolder(questionNumber, slug);
   const langFolder = getLanguageName(language)?.toLowerCase().replace(/[^a-z0-9+#]/g, '').replace(/\+/g, 'plus').replace(/#/g, 'sharp') || 'unknown';
-  return `problems/${folder}/${langFolder}/${filename}`;
+  return `${baseDirectory}/${langFolder}/${filename}`;
 }
 
 /**
  * Build the manifest.json path for a problem.
  */
-export function buildManifestPath(questionNumber: number, slug: string): string {
-  const folder = buildProblemFolder(questionNumber, slug);
-  return `problems/${folder}/manifest.json`;
+export function buildManifestPath(baseDirectory: string): string {
+  return `${baseDirectory}/manifest.json`;
 }
 
 /**
  * Build the README.md path for a problem.
  */
-export function buildReadmePath(questionNumber: number, slug: string): string {
-  const folder = buildProblemFolder(questionNumber, slug);
-  return `problems/${folder}/README.md`;
+export function buildReadmePath(baseDirectory: string): string {
+  return `${baseDirectory}/README.md`;
 }
 
 /**

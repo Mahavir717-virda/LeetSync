@@ -146,6 +146,32 @@
   };
 
   const pendingSubmissions = new Map<string, any>();
+  const submissionTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function isSubmissionReady(sub: any): boolean {
+    return Boolean(
+      sub.code &&
+      sub.language &&
+      sub.status &&
+      sub.questionNumber > 0 &&
+      sub.difficulty &&
+      sub.tags && sub.tags.length > 0
+    );
+  }
+
+  function dispatchSubmission(submissionId: string, sub: any, isPartial: boolean = false) {
+    if (seenSubmissions.has(submissionId)) return;
+    
+    seenSubmissions.add(submissionId);
+    pendingSubmissions.delete(submissionId);
+    if (submissionTimeouts.has(submissionId)) {
+      clearTimeout(submissionTimeouts.get(submissionId)!);
+      submissionTimeouts.delete(submissionId);
+    }
+    
+    console.log(`[LeetSync] Submission captured successfully${isPartial ? ' (PARTIAL METADATA)' : ''}:`, sub);
+    window.postMessage({ type: 'LEETSYNC_SUBMISSION', data: sub }, '*');
+  }
 
   function mergeAndSendSubmission(submissionId: string, partialData: any) {
     if (seenSubmissions.has(submissionId)) return;
@@ -156,21 +182,47 @@
     for (const key of Object.keys(partialData)) {
       const val = partialData[key];
       if (val !== undefined && val !== null && val !== '') {
-        sub[key] = val;
+        // For tags, only merge if it's an array and not empty
+        if (key === 'tags') {
+          if (Array.isArray(val) && val.length > 0) {
+            sub[key] = val;
+          }
+        } else {
+          sub[key] = val;
+        }
       }
     }
     
     pendingSubmissions.set(submissionId, sub);
     console.log(`[LeetSync Debug] Merged submission state for ${submissionId}:`, sub);
 
-    // If we have the minimum required fields to sync, send it to the background!
-    if (sub.code && sub.status && sub.language) {
-      seenSubmissions.add(submissionId);
-      pendingSubmissions.delete(submissionId);
-      console.log('[LeetSync] Submission captured successfully:', sub);
-      window.postMessage({ type: 'LEETSYNC_SUBMISSION', data: sub }, '*');
+    // Setup a 5-second timeout fallback if this is the first time we see this submission
+    if (!submissionTimeouts.has(submissionId)) {
+      const timeout = setTimeout(() => {
+        if (!seenSubmissions.has(submissionId)) {
+          console.warn(`[LeetSync] GraphQL metadata missing after 5 seconds for ${submissionId}. Syncing with partial metadata.`);
+          // If we have at least the basic fields, send it
+          if (sub.code && sub.status && sub.language) {
+            dispatchSubmission(submissionId, sub, true);
+          }
+        }
+      }, 5000);
+      submissionTimeouts.set(submissionId, timeout);
+    }
+
+    if (isSubmissionReady(sub)) {
+      dispatchSubmission(submissionId, sub, false);
     } else {
-      console.log(`[LeetSync Debug] Waiting for more data. Missing: code=${!sub.code}, status=${!sub.status}, language=${!sub.language}`);
+      console.log(
+        `[LeetSync Debug] Waiting for more data for ${submissionId}...\n` +
+        `Missing:\n` +
+        `${sub.code ? '✓' : '✗'} code\n` +
+        `${sub.language ? '✓' : '✗'} language\n` +
+        `${sub.status ? '✓' : '✗'} status\n` +
+        `${sub.questionNumber > 0 ? '✓' : '✗'} questionNumber\n` +
+        `${sub.difficulty ? '✓' : '✗'} difficulty\n` +
+        `${sub.tags && sub.tags.length > 0 ? '✓' : '✗'} tags`
+      );
     }
   }
 
