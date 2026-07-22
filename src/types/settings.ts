@@ -1,3 +1,5 @@
+import type { MigrationChoice } from './migration';
+
 /**
  * Extension settings stored in chrome.storage.local.
  */
@@ -18,6 +20,10 @@ export interface LeetSyncSettings {
   syncMode: SyncMode;
   /** How to structure the repository folders */
   folderStructure: FolderStructure;
+  /** Repo layout version (1 = legacy flat, 2 = topic/difficulty) */
+  layoutVersion: number;
+  /** User's choice regarding repository migration */
+  migrationChoice: MigrationChoice | null;
   /** Whether auto-sync is enabled */
   autoSync: boolean;
   /** Whether to show desktop notifications */
@@ -52,6 +58,8 @@ export const DEFAULT_SETTINGS: LeetSyncSettings = {
   repoName: null,
   syncMode: 'accepted_only',
   folderStructure: 'Topic/Difficulty',
+  layoutVersion: 1,
+  migrationChoice: null,
   autoSync: true,
   notifications: true,
   lastSyncedProblem: null,

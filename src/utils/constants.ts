@@ -110,6 +110,20 @@ export enum MessageType {
   GET_RECENT_SYNCS = 'GET_RECENT_SYNCS',
   GET_QUEUE_STATUS = 'GET_QUEUE_STATUS',
   MANUAL_SYNC = 'MANUAL_SYNC',
+  // Migration Message Types
+  DETECT_LAYOUT = 'DETECT_LAYOUT',
+  RUN_PREFLIGHT = 'RUN_PREFLIGHT',
+  GET_MIGRATION_PLAN = 'GET_MIGRATION_PLAN',
+  START_MIGRATION_SCAN = 'START_MIGRATION_SCAN',
+  SET_MIGRATION_CHOICE = 'SET_MIGRATION_CHOICE',
+  CONFIRM_MIGRATION = 'CONFIRM_MIGRATION',
+  CANCEL_MIGRATION = 'CANCEL_MIGRATION',
+  RESUME_MIGRATION = 'RESUME_MIGRATION',
+  RESOLVE_CONFLICT = 'RESOLVE_CONFLICT',
+  START_ROLLBACK = 'START_ROLLBACK',
+  GET_MIGRATION_PROGRESS = 'GET_MIGRATION_PROGRESS',
+  EXPORT_MIGRATION_LOG = 'EXPORT_MIGRATION_LOG',
+  REGENERATE_STATS = 'REGENERATE_STATS',
 }
 
 /** Storage keys for chrome.storage.local */
@@ -117,4 +131,29 @@ export enum StorageKey {
   SETTINGS = 'leetsync_settings',
   RECENT_SYNCS = 'leetsync_recent_syncs',
   SUBMISSION_HASHES = 'leetsync_submission_hashes',
+  MIGRATION_PLAN = 'leetsync_migration_plan',
+  ROLLBACK_PLAN = 'leetsync_rollback_plan',
+  MIGRATION_LOG = 'leetsync_migration_log',
+  METADATA_CACHE = 'leetsync_metadata_cache',
+  MIGRATION_LOCK = 'leetsync_migration_lock',
 }
+
+/** Migration constants */
+export const KNOWN_TOPIC_FOLDERS = [
+  'Array', 'String', 'Hash-Table', 'Linked-List', 'Tree', 'Graph',
+  'Heap', 'Stack', 'Queue', 'Binary-Search', 'Dynamic-Programming',
+  'Greedy', 'Backtracking', 'Trie', 'Math', 'Bit-Manipulation',
+  'Geometry', 'Database', 'Shell', 'Concurrency', 'Uncategorized'
+];
+
+export const NON_LEETCODE_INDICATORS = [
+  'package.json', 'Cargo.toml', 'go.mod', 'pom.xml',
+  'build.gradle', 'Makefile', 'docker-compose.yml',
+  'tsconfig.json', 'webpack.config.js', 'vite.config.ts'
+];
+
+export const PROBLEM_FOLDER_REGEX = /^(\d{4})-(.+)$/;
+export const MAX_METADATA_CACHE_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+export const MIGRATION_LOCK_TTL_MS = 30 * 60 * 1000; // 30 min auto-expire
+export const COMMIT_BATCH_SIZE = 500; // files per commit batch
+

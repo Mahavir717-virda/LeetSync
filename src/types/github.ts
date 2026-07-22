@@ -22,6 +22,11 @@ export interface GitHubRepo {
     login: string;
     avatar_url: string;
   };
+  permissions?: {
+    admin: boolean;
+    push: boolean;
+    pull: boolean;
+  };
 }
 
 export interface GitHubFileContent {
@@ -65,3 +70,47 @@ export interface GitHubRateLimit {
   reset: number;
   used: number;
 }
+
+/**
+ * Git Data API Response Types
+ */
+export interface GitHubTreeEntry {
+  path: string;
+  mode: string;
+  type: 'blob' | 'tree';
+  sha: string;
+  size?: number;
+}
+
+export interface GitHubTreeResponse {
+  sha: string;
+  tree: GitHubTreeEntry[];
+  truncated: boolean;
+}
+
+export interface GitHubBlobResponse {
+  sha: string;
+  content: string;
+  encoding: 'base64' | 'utf-8';
+  size: number;
+}
+
+export interface GitHubRefResponse {
+  ref: string;
+  object: {
+    sha: string;
+    type: string;
+  };
+}
+
+export interface GitHubCommitResponse {
+  sha: string;
+  tree: {
+    sha: string;
+  };
+  message: string;
+  parents: {
+    sha: string;
+  }[];
+}
+
