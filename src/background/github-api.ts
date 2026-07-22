@@ -409,6 +409,58 @@ class GitHubApi {
   // ─── Utility ─────────────────────────────────────────────────
 
   /**
+   * Push multiple files in a single atomic Git Data API commit batch.
+   */
+  async pushFiles(
+    token: string,
+    owner: string,
+    repo: string,
+    files: { path: string; content: string }[],
+    message: string,
+    branch: string = 'main'
+  ): Promise<string> {
+    if (files.length === 0) return '';
+
+    // 1. Get branch HEAD ref
+    const ref = await this.getRef(token, owner, repo, branch);
+    const parentCommitSha = ref.object.sha;
+
+    // 2. Get parent commit to retrieve tree SHA
+    const parentCommit = await this.getCommit(token, owner, repo, parentCommitSha);
+    const baseTreeSha = parentCommit.tree.sha;
+
+    // 3. Create blobs for each file
+    const treeMutations = await Promise.all(
+      files.map(async (file) => {
+        const blob = await this.request<GitHubBlobResponse>(`/repos/${owner}/${repo}/git/blobs`, token, {
+          method: 'POST',
+          body: JSON.stringify({
+            content: utf8ToBase64(file.content),
+            encoding: 'base64',
+          }),
+        });
+        return {
+          path: file.path,
+          mode: '100644',
+          type: 'blob',
+          sha: blob.sha,
+        };
+      })
+    );
+
+    // 4. Create new tree
+    const newTree = await this.createTree(token, owner, repo, baseTreeSha, treeMutations);
+
+    // 5. Create new commit
+    const newCommit = await this.createCommit(token, owner, repo, message, newTree.sha, [parentCommitSha]);
+
+    // 6. Update branch HEAD reference
+    await this.updateRef(token, owner, repo, branch, newCommit.sha);
+
+    return newCommit.sha;
+  }
+
+  /**
    * Decode base64 file content from GitHub's API response.
    * Uses the UTF-8 safe decoder to handle non-ASCII characters correctly.
    */

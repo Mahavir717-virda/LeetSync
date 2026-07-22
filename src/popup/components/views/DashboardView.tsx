@@ -197,6 +197,25 @@ export function DashboardView({
           </div>
         </div>
 
+        {/* ── One-Click History Importer Hero Banner ───────────── */}
+        <div class="ls-card bg-gradient-to-r from-accent-blue/10 to-emerald-500/10 border-accent-blue/30 flex items-center justify-between p-3.5">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-xl bg-accent-blue/20 border border-accent-blue/40 flex items-center justify-center text-accent-blue">
+              ⚡
+            </div>
+            <div>
+              <h4 class="text-xs font-bold text-text-primary">One-Click History Importer</h4>
+              <p class="text-[11px] text-text-muted">Import all past LeetCode accepted solutions into GitHub</p>
+            </div>
+          </div>
+          <button
+            onClick={() => onNavigate('import')}
+            class="text-xs bg-accent-blue text-white font-semibold px-3 py-1.5 rounded-lg shadow-blue-glow hover:bg-blue-500 transition-colors btn-press shrink-0"
+          >
+            Import →
+          </button>
+        </div>
+
         {/* ── Quick Actions ─────────────────────────────────────── */}
         <div>
           <SectionHeader title="Quick Actions" />

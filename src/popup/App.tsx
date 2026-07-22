@@ -7,6 +7,7 @@ import { TopHeader, ViewportMode } from './components/layout/TopHeader';
 import { AuthView } from './components/views/AuthView';
 import { DashboardView } from './components/views/DashboardView';
 import { MigrationView } from './components/views/MigrationView';
+import { ImportView } from './components/views/ImportView';
 import { LogsView } from './components/views/LogsView';
 import { StatsView } from './components/views/StatsView';
 import { SettingsView } from './components/views/SettingsView';
@@ -32,7 +33,7 @@ function sendMessage<T = any>(type: MessageType | string, payload?: any): Promis
 }
 
 export function App() {
-  const [view, setView] = useState<'loading' | 'auth' | 'dashboard' | 'migration' | 'logs' | 'stats' | 'settings'>('loading');
+  const [view, setView] = useState<'loading' | 'auth' | 'dashboard' | 'migration' | 'import' | 'logs' | 'stats' | 'settings'>('loading');
   const [viewportMode, setViewportMode] = useState<ViewportMode>('popup');
   const [authenticated, setAuthenticated] = useState(false);
   const [settings, setSettings] = useState<LeetSyncSettings>(DEFAULT_SETTINGS);
@@ -213,6 +214,13 @@ export function App() {
           />
         ) : view === 'migration' ? (
           <MigrationView
+            repoOwner={repoOwner}
+            repoName={repoName}
+            onNavigate={(v) => setView(v as any)}
+            addToast={addToast}
+          />
+        ) : view === 'import' ? (
+          <ImportView
             repoOwner={repoOwner}
             repoName={repoName}
             onNavigate={(v) => setView(v as any)}

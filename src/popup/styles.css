@@ -31,8 +31,6 @@ html, body, #app {
 
 /* ─── Popup Container ─────────────────────────────────────────── */
 .popup-mode  { width: 380px; height: 580px; max-height: 580px; overflow: hidden; }
-.panel-mode  { width: 680px; height: 100vh; max-height: 100vh; overflow: hidden; }
-.tab-mode    { width: 100%; min-height: 100vh; }
 
 
 /* ─── Toggle Component ────────────────────────────────────────── */

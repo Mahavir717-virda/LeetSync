@@ -1,6 +1,6 @@
 import { h } from 'preact';
 
-export type ViewportMode = 'popup' | 'panel' | 'tab';
+export type ViewportMode = 'popup';
 
 interface TopHeaderProps {
   viewportMode: ViewportMode;
@@ -36,20 +36,6 @@ export function TopHeader({ viewportMode, onToggleViewport, authenticated, usern
             class={`px-2 py-0.5 text-xs rounded transition-colors btn-press ${viewportMode === 'popup' ? 'bg-bg-secondary text-accent-blue font-medium shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}
           >
             Popup
-          </button>
-          <button
-            onClick={() => onToggleViewport('panel')}
-            title="Side Panel Mode (680px)"
-            class={`px-2 py-0.5 text-xs rounded transition-colors btn-press ${viewportMode === 'panel' ? 'bg-bg-secondary text-accent-blue font-medium shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}
-          >
-            Panel
-          </button>
-          <button
-            onClick={() => onToggleViewport('tab')}
-            title="Full Tab Mode"
-            class={`px-2 py-0.5 text-xs rounded transition-colors btn-press ${viewportMode === 'tab' ? 'bg-bg-secondary text-accent-blue font-medium shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}
-          >
-            Full
           </button>
         </div>
 

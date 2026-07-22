@@ -21,6 +21,9 @@ export type {
 export type { LeetSyncSettings, SyncMode, FolderStructure, StreakData } from './settings';
 export { DEFAULT_SETTINGS } from './settings';
 
+// ─── Import Subsystem ──────────────────────────────────────────────────────────
+export * from './import';
+
 // ─── GitHub & Migration ────────────────────────────────────────────────────────
 export * from './github';
 export * from './migration';

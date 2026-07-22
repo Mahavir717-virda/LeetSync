@@ -17,6 +17,8 @@ import { syncSubmission } from './sync-engine';
 import { getPendingItems, markInProgress, markComplete, markFailed, getQueueStats, acquireLock, releaseLock, resetStuckItems } from './queue';
 import { getSettings as storageGetSettings, updateSettings as storageUpdateSettings, getMigrationPlan } from '@/utils/storage';
 import { handleStartMigrationScan, handleConfirmMigration, handleCancelMigration, handleStartRollback, handleRegenerateStats, migrationLogger } from './migration';
+import { importEngine } from './importer/engine';
+import { getImportSession } from './importer/session';
 
 
 
@@ -141,6 +143,34 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 
     case MessageType.REGENERATE_STATS:
       handleRegenerateStats().then(sendResponse);
+      return true;
+
+    // ─── Importer Message Types ─────────────────────────────────
+
+    case MessageType.CHECK_IMPORT_CAPABILITY:
+      importEngine.runCapabilityCheck().then(sendResponse);
+      return true;
+
+    case MessageType.START_PROFILE_DISCOVERY:
+      importEngine.discoverProfile().then((profile) => sendResponse({ profile }));
+      return true;
+
+    case MessageType.START_SUBMISSION_DISCOVERY:
+      importEngine.startDiscovery(payload?.strategy).then((session) => sendResponse({ session }));
+      return true;
+
+    case MessageType.START_HISTORICAL_IMPORT:
+      importEngine.executeImport().then((report) => sendResponse({ report }));
+      return true;
+
+    case MessageType.PAUSE_IMPORT:
+    case MessageType.CANCEL_IMPORT:
+      importEngine.cancel();
+      sendResponse({ success: true });
+      return true;
+
+    case MessageType.GET_IMPORT_SESSION:
+      getImportSession().then((session) => sendResponse({ session }));
       return true;
 
 
