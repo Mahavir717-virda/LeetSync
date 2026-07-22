@@ -1,10 +1,29 @@
 import { h } from 'preact';
-import { useState, useMemo } from 'preact/hooks';
+import { useState, useEffect, useMemo } from 'preact/hooks';
+import { MessageType, StorageKey } from '@/utils/constants';
+import type { MigrationLogEntry } from '@/types';
 import { LogViewer } from '../ui/dialogs';
 import { EmptyState } from '../ui/index';
 import type { LogLine } from '../ui/dialogs';
 
-// ─── Seed mock logs ───────────────────────────────────────────────────────────
+/** Helper to send messages to background script */
+function sendMessage<T = any>(type: MessageType | string, payload?: any): Promise<T> {
+  return new Promise((resolve, reject) => {
+    if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+      chrome.runtime.sendMessage({ type, payload }, (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else {
+          resolve(response);
+        }
+      });
+    } else {
+      resolve({} as T);
+    }
+  });
+}
+
+// ─── Initial Fallback Sample Logs ─────────────────────────────────────────────
 
 let logId = 100;
 function seedLog(level: LogLine['level'], source: string, message: string, detail?: string): LogLine {
@@ -15,7 +34,7 @@ function seedLog(level: LogLine['level'], source: string, message: string, detai
   return { id: String(++logId), time, level, source, message, detail };
 }
 
-const INITIAL_LOGS: LogLine[] = [
+const INITIAL_FALLBACK_LOGS: LogLine[] = [
   seedLog('INFO', 'Extension',  'LeetSync background service worker loaded.'),
   seedLog('INFO', 'Auth',       'Validating stored GitHub token...'),
   seedLog('OK',   'Auth',       'Token valid. User: mahavir717'),
@@ -40,36 +59,117 @@ interface LogsViewProps {
 }
 
 export function LogsView({ onNavigate }: LogsViewProps) {
-  const [logs, setLogs] = useState<LogLine[]>(INITIAL_LOGS);
+  const [rawLogs, setRawLogs] = useState<LogLine[]>(INITIAL_FALLBACK_LOGS);
   const [search, setSearch] = useState('');
   const [level, setLevel] = useState<LevelFilter>('ALL');
 
+  // Convert background MigrationLogEntry to UI LogLine format
+  const formatEntries = (entries: MigrationLogEntry[]): LogLine[] => {
+    return entries.map((entry, idx) => {
+      const d = entry.timestamp ? new Date(entry.timestamp) : new Date();
+      const time = `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}:${String(d.getSeconds()).padStart(2,'0')}`;
+      const lvl: LogLine['level'] =
+        entry.level === 'error' ? 'ERR' :
+        entry.level === 'warn'  ? 'WARN' :
+        entry.level === 'info' && entry.message.includes('success') ? 'OK' : 'INFO';
+
+      return {
+        id: `real_${idx}_${d.getTime()}`,
+        time,
+        level: lvl,
+        source: entry.phase || 'System',
+        message: entry.message,
+        detail: entry.data ? JSON.stringify(entry.data, null, 2) : undefined,
+      };
+    });
+  };
+
+  // Load real logs on mount
+  const loadRealLogs = async () => {
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      const result = await chrome.storage.local.get(StorageKey.MIGRATION_LOG);
+      const stored = result[StorageKey.MIGRATION_LOG] as MigrationLogEntry[] | undefined;
+      if (stored && Array.isArray(stored) && stored.length > 0) {
+        setRawLogs(formatEntries(stored));
+      }
+    }
+  };
+
+  useEffect(() => {
+    loadRealLogs();
+
+    // Listen for storage changes to update log window live in real time
+    if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+      const listener = (changes: { [key: string]: chrome.storage.StorageChange }) => {
+        if (changes.leetsync_migration_log?.newValue) {
+          const newEntries = changes.leetsync_migration_log.newValue as MigrationLogEntry[];
+          if (Array.isArray(newEntries) && newEntries.length > 0) {
+            setRawLogs(formatEntries(newEntries));
+          }
+        }
+      };
+      chrome.storage.onChanged.addListener(listener);
+      return () => chrome.storage.onChanged.removeListener(listener);
+    }
+  }, []);
+
   const filtered = useMemo(() => {
-    return logs.filter((l) => {
+    return rawLogs.filter((l) => {
       const matchLevel = level === 'ALL' || l.level === level;
-      const matchSearch = !search ||
+      const matchSearch =
+        !search ||
         l.message.toLowerCase().includes(search.toLowerCase()) ||
         l.source.toLowerCase().includes(search.toLowerCase());
       return matchLevel && matchSearch;
     });
-  }, [logs, search, level]);
+  }, [rawLogs, search, level]);
 
-  const handleSimulateError = () => {
+  const handleSimulateError = async () => {
     const errLog = seedLog(
       'ERR', 'SyncEngine',
       'GitHub push failed: 422 Unprocessable Entity',
       'Error: PATCH https://api.github.com/repos/mahavir717/leetcode-solutions/git/refs/heads/main → 422\nMessage: Reference cannot be updated\nCause: Concurrent push detected — SHA conflict\n\nResolution: Retry with fresh branch SHA. Check queue.ts acquireLock().'
     );
-    setLogs((prev) => [...prev, errLog]);
+    setRawLogs((prev) => [...prev, errLog]);
+
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      const newEntry: MigrationLogEntry = {
+        timestamp: new Date().toISOString(),
+        level: 'error',
+        phase: 'SyncEngine',
+        message: 'GitHub push failed: 422 Unprocessable Entity',
+        data: { error: 'Reference cannot be updated', cause: 'Concurrent push detected' },
+      };
+      const res = await chrome.storage.local.get(StorageKey.MIGRATION_LOG);
+      const current = (res[StorageKey.MIGRATION_LOG] as MigrationLogEntry[]) || [];
+      await chrome.storage.local.set({ [StorageKey.MIGRATION_LOG]: [...current, newEntry] });
+    }
   };
 
-  const handleExport = () => {
-    const data = JSON.stringify(logs, null, 2);
-    const blob = new Blob([data], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'leetsync-logs.json'; a.click();
-    URL.revokeObjectURL(url);
+  const handleExport = async () => {
+    try {
+      const exportRes = await sendMessage<{ logs?: string }>(MessageType.EXPORT_MIGRATION_LOG);
+      const dataStr = exportRes?.logs || JSON.stringify(rawLogs, null, 2);
+      const blob = new Blob([dataStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'leetsync-logs.json'; a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      const dataStr = JSON.stringify(rawLogs, null, 2);
+      const blob = new Blob([dataStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'leetsync-logs.json'; a.click();
+      URL.revokeObjectURL(url);
+    }
+  };
+
+  const handleClear = async () => {
+    setRawLogs([]);
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      await chrome.storage.local.remove(StorageKey.MIGRATION_LOG as unknown as string);
+    }
   };
 
   const LEVELS: LevelFilter[] = ['ALL', 'INFO', 'OK', 'WARN', 'ERR'];
@@ -90,11 +190,11 @@ export function LogsView({ onNavigate }: LogsViewProps) {
             <path d="M19 12H5M12 19l-7-7 7-7" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
         </button>
-        <div>
-          <h2 class="text-sm font-semibold text-text-primary">Log Viewer</h2>
-          <p class="text-xs text-text-muted">{logs.length} entries</p>
+        <div class="flex-1 min-w-0">
+          <h2 class="text-sm font-semibold text-text-primary">Log Viewer & Diagnostics</h2>
+          <p class="text-xs text-text-muted">{rawLogs.length} total entries</p>
         </div>
-        <div class="ml-auto flex items-center gap-1.5">
+        <div class="ml-auto flex items-center gap-1.5 shrink-0">
           <button
             onClick={handleSimulateError}
             class="text-xs bg-red-500/5 text-red-400 border border-red-500/20 px-2 py-1 rounded-lg hover:bg-red-500/10 transition-colors btn-press"
@@ -108,7 +208,7 @@ export function LogsView({ onNavigate }: LogsViewProps) {
             Export
           </button>
           <button
-            onClick={() => setLogs([])}
+            onClick={handleClear}
             class="text-xs text-text-muted border border-border px-2 py-1 rounded-lg hover:bg-bg-tertiary transition-colors btn-press"
           >
             Clear
@@ -125,7 +225,7 @@ export function LogsView({ onNavigate }: LogsViewProps) {
           </svg>
           <input
             type="text"
-            placeholder="Search log messages..."
+            placeholder="Search log messages or sources..."
             value={search}
             onInput={(e) => setSearch((e.target as HTMLInputElement).value)}
             class="w-full bg-bg-tertiary border border-border rounded-lg pl-7 pr-3 py-1.5 text-xs text-text-primary placeholder-text-muted focus:outline-none focus:border-accent-blue/60 transition-colors"
@@ -139,7 +239,7 @@ export function LogsView({ onNavigate }: LogsViewProps) {
               key={l}
               onClick={() => setLevel(l)}
               class={`text-xs px-2 py-1 rounded-lg border transition-colors btn-press ${
-                level === l ? LEVEL_COLORS[l] + ' bg-opacity-10' : 'text-text-muted border-border hover:bg-bg-tertiary'
+                level === l ? LEVEL_COLORS[l] + ' bg-opacity-10 font-medium' : 'text-text-muted border-border hover:bg-bg-tertiary'
               }`}
             >
               {l}
@@ -153,9 +253,9 @@ export function LogsView({ onNavigate }: LogsViewProps) {
         {filtered.length === 0 ? (
           <EmptyState
             icon="📋"
-            title="No logs found"
-            description={logs.length === 0 ? 'Start syncing to see activity here.' : 'No logs match your filter.'}
-            action={logs.length === 0 ? undefined : { label: 'Clear filter', onClick: () => { setSearch(''); setLevel('ALL'); } }}
+            title="No logs match your filter"
+            description={rawLogs.length === 0 ? 'Start syncing to see activity here.' : 'Try adjusting search or level filters.'}
+            action={rawLogs.length === 0 ? undefined : { label: 'Reset filters', onClick: () => { setSearch(''); setLevel('ALL'); } }}
           />
         ) : (
           <LogViewer logs={filtered} />
