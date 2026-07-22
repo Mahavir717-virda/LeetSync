@@ -421,43 +421,62 @@ class GitHubApi {
   ): Promise<string> {
     if (files.length === 0) return '';
 
-    // 1. Get branch HEAD ref
-    const ref = await this.getRef(token, owner, repo, branch);
-    const parentCommitSha = ref.object.sha;
+    let attempt = 0;
+    const maxAttempts = 3;
 
-    // 2. Get parent commit to retrieve tree SHA
-    const parentCommit = await this.getCommit(token, owner, repo, parentCommitSha);
-    const baseTreeSha = parentCommit.tree.sha;
+    while (attempt < maxAttempts) {
+      attempt++;
+      try {
+        // 1. Get branch HEAD ref
+        const ref = await this.getRef(token, owner, repo, branch);
+        const parentCommitSha = ref.object.sha;
 
-    // 3. Create blobs for each file
-    const treeMutations = await Promise.all(
-      files.map(async (file) => {
-        const blob = await this.request<GitHubBlobResponse>(`/repos/${owner}/${repo}/git/blobs`, token, {
-          method: 'POST',
-          body: JSON.stringify({
-            content: utf8ToBase64(file.content),
-            encoding: 'base64',
-          }),
-        });
-        return {
-          path: file.path,
-          mode: '100644',
-          type: 'blob',
-          sha: blob.sha,
-        };
-      })
-    );
+        // 2. Get parent commit to retrieve tree SHA
+        const parentCommit = await this.getCommit(token, owner, repo, parentCommitSha);
+        const baseTreeSha = parentCommit.tree.sha;
 
-    // 4. Create new tree
-    const newTree = await this.createTree(token, owner, repo, baseTreeSha, treeMutations);
+        // 3. Create blobs for each file
+        const treeMutations = await Promise.all(
+          files.map(async (file) => {
+            const blob = await this.request<GitHubBlobResponse>(`/repos/${owner}/${repo}/git/blobs`, token, {
+              method: 'POST',
+              body: JSON.stringify({
+                content: utf8ToBase64(file.content),
+                encoding: 'base64',
+              }),
+            });
+            return {
+              path: file.path,
+              mode: '100644',
+              type: 'blob',
+              sha: blob.sha,
+            };
+          })
+        );
 
-    // 5. Create new commit
-    const newCommit = await this.createCommit(token, owner, repo, message, newTree.sha, [parentCommitSha]);
+        // 4. Create new tree
+        const newTree = await this.createTree(token, owner, repo, baseTreeSha, treeMutations);
 
-    // 6. Update branch HEAD reference
-    await this.updateRef(token, owner, repo, branch, newCommit.sha);
+        // 5. Create new commit
+        const newCommit = await this.createCommit(token, owner, repo, message, newTree.sha, [parentCommitSha]);
 
-    return newCommit.sha;
+        // 6. Update branch HEAD reference (with retry if fast-forward conflict occurs)
+        await this.updateRef(token, owner, repo, branch, newCommit.sha);
+
+        return newCommit.sha;
+      } catch (err: any) {
+        if (err?.message?.includes('fast forward') || err?.status === 422) {
+          console.warn(`[GitHub API] Non-fast-forward conflict on pushFiles (attempt ${attempt}/${maxAttempts}). Retrying with latest HEAD...`);
+          if (attempt < maxAttempts) {
+            await new Promise((res) => setTimeout(res, 500 * attempt));
+            continue;
+          }
+        }
+        throw err;
+      }
+    }
+
+    throw new Error('Pushing batch files failed after retries due to concurrent commits.');
   }
 
   /**

@@ -52,9 +52,41 @@ export function ImportView({ repoOwner = 'mahavir717', repoName = 'leetcode-solu
   const [error, setError] = useState<string | null>(null);
   const [showCancelModal, setShowCancelModal] = useState(false);
 
-  // Check capability preflight on mount
+  // Check capability preflight & check for active background import session on mount
   useEffect(() => {
     runPreflight();
+
+    // Fetch active session from background
+    sendMessage<{ session: ImportSession | null }>(MessageType.GET_IMPORT_SESSION).then((res) => {
+      if (res?.session) {
+        setSession(res.session);
+        if (res.session.status === 'uploading' || res.session.status === 'paused') {
+          setStep('progress');
+          setIsImporting(res.session.status === 'uploading');
+          setIsPaused(res.session.status === 'paused');
+        }
+      }
+    });
+
+    // Listen for real-time background session updates
+    const handleStorageChange = (changes: { [key: string]: chrome.storage.StorageChange }, areaName: string) => {
+      if (areaName === 'local' && changes['leetsync_import_session']?.newValue) {
+        const updatedSession: ImportSession = changes['leetsync_import_session'].newValue;
+        setSession(updatedSession);
+        if (updatedSession.status === 'completed') {
+          setIsImporting(false);
+          setStep('report');
+        } else if (updatedSession.status === 'uploading' || updatedSession.status === 'paused') {
+          setIsImporting(updatedSession.status === 'uploading');
+          setIsPaused(updatedSession.status === 'paused');
+        }
+      }
+    };
+
+    if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+      chrome.storage.onChanged.addListener(handleStorageChange);
+      return () => chrome.storage.onChanged.removeListener(handleStorageChange);
+    }
   }, []);
 
   const runPreflight = async () => {
