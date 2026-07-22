@@ -37,7 +37,7 @@ export function AuthView({ onAuthenticated, onConnectGitHub, onUsePAT, isLogging
   };
 
   return (
-    <div class="flex flex-col gap-5 p-4 animate-slide-in-right">
+    <div class="flex-1 overflow-y-auto flex flex-col gap-5 p-4 animate-slide-in-right">
       {/* Hero */}
       <div class="flex flex-col items-center gap-3 pt-4 text-center">
         {/* Logo */}

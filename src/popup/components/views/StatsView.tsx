@@ -31,7 +31,7 @@ export function StatsView({ onNavigate }: StatsViewProps) {
   });
 
   return (
-    <div class="flex flex-col h-full">
+    <div class="flex flex-col h-full overflow-hidden">
       {/* Header */}
       <div class="flex items-center gap-3 px-4 pt-3 pb-2 border-b border-border">
         <button onClick={() => onNavigate('dashboard')} class="text-text-muted hover:text-text-primary btn-press p-1">

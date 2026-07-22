@@ -34,11 +34,16 @@ const MOCK_CELEBRATION = {
   repo: 'mahavir717/leetcode-solutions',
 };
 
+import type { RecentSync } from '@/types';
+
 interface DashboardViewProps {
   username?: string;
   repoOwner?: string;
   repoName?: string;
   autoSync?: boolean;
+  recentSyncs?: RecentSync[];
+  streakDays?: number;
+  totalSynced?: number;
   onToggleAutoSync?: () => void;
   onNavigate: (view: string) => void;
   addToast: (t: Omit<ToastData, 'id'>) => void;
@@ -49,6 +54,9 @@ export function DashboardView({
   repoOwner = 'mahavir717',
   repoName = 'leetcode-solutions',
   autoSync = true,
+  recentSyncs = [],
+  streakDays = 14,
+  totalSynced = 342,
   onToggleAutoSync,
   onNavigate,
   addToast,
@@ -56,6 +64,34 @@ export function DashboardView({
   const [isSyncing, setIsSyncing] = useState(false);
   const [showCelebration, setShowCelebration] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+
+  // Compute activity list from real recent syncs or fall back to mock
+  const activityList = recentSyncs.length > 0
+    ? recentSyncs.slice(0, 4).map((s, i) => ({
+        id: String(i),
+        title: s.problemTitle,
+        difficulty: 'Medium', // default display if metadata not present
+        language: s.language,
+        sha: s.commitSha || 'latest',
+        time: s.timestamp ? new Date(s.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Recently',
+      }))
+    : RECENT_ACTIVITY;
+
+  const latestSync = recentSyncs[0];
+  const heroSubmission = latestSync
+    ? {
+        title: latestSync.problemTitle,
+        difficulty: 'Medium',
+        language: latestSync.language,
+        runtime: latestSync.runtime || 'N/A',
+        runtimePercentile: 90,
+        memory: 'N/A',
+        memoryPercentile: 85,
+        sha: latestSync.commitSha || 'a7f39b12d45f8e9c1b0a73e5df62891c4567890f',
+        synced: latestSync.timestamp ? `${Math.max(1, Math.floor((Date.now() - new Date(latestSync.timestamp).getTime()) / 60000))} min ago` : '4 min ago',
+      }
+    : HERO_SUBMISSION;
+
 
   const handleManualSync = () => {
     if (isSyncing) return;
@@ -72,7 +108,7 @@ export function DashboardView({
   };
 
   return (
-    <div class="flex flex-col h-full">
+    <div class="flex flex-col h-full overflow-hidden">
       {/* ── Connection Status Bar ───────────────────────────────── */}
       <div class="flex items-center gap-2 px-4 pt-3 pb-2 border-b border-border">
         <div class="flex items-center gap-1.5 flex-1 min-w-0">
@@ -93,9 +129,9 @@ export function DashboardView({
 
         {/* ── Metrics Row ──────────────────────────────────────── */}
         <div class="grid grid-cols-3 gap-2">
-          <MetricCard value="342" label="Synced" sub="+3 today" trend="up" accent="text-accent-blue" />
+          <MetricCard value={totalSynced} label="Synced" sub="+3 today" trend="up" accent="text-accent-blue" />
           <MetricCard value="99.4%" label="Success" sub="All time" accent="text-emerald-400" />
-          <MetricCard value="14🔥" label="Streak" sub="Days" accent="text-yellow-400" />
+          <MetricCard value={`${streakDays}🔥`} label="Streak" sub="Days" accent="text-yellow-400" />
         </div>
 
         {/* ── Recent Submission Hero Card ───────────────────────── */}
@@ -103,30 +139,30 @@ export function DashboardView({
           <div class="flex items-start justify-between gap-2 mb-2">
             <div class="flex-1 min-w-0">
               <p class="text-xs text-text-muted mb-1">Latest Submission</p>
-              <h3 class="text-sm font-semibold text-text-primary leading-tight">{HERO_SUBMISSION.title}</h3>
+              <h3 class="text-sm font-semibold text-text-primary leading-tight">{heroSubmission.title}</h3>
             </div>
-            <DifficultyBadge difficulty={HERO_SUBMISSION.difficulty} />
+            <DifficultyBadge difficulty={heroSubmission.difficulty} />
           </div>
 
           <div class="grid grid-cols-2 gap-2 mt-3">
             <div class="bg-bg-tertiary rounded-lg p-2">
               <p class="text-xs text-text-muted">Runtime</p>
-              <p class="text-sm font-semibold text-text-primary">{HERO_SUBMISSION.runtime}</p>
-              <p class="text-xs text-emerald-400">Beats {HERO_SUBMISSION.runtimePercentile}%</p>
+              <p class="text-sm font-semibold text-text-primary">{heroSubmission.runtime}</p>
+              <p class="text-xs text-emerald-400">Beats {heroSubmission.runtimePercentile}%</p>
             </div>
             <div class="bg-bg-tertiary rounded-lg p-2">
               <p class="text-xs text-text-muted">Memory</p>
-              <p class="text-sm font-semibold text-text-primary">{HERO_SUBMISSION.memory}</p>
-              <p class="text-xs text-text-secondary">Beats {HERO_SUBMISSION.memoryPercentile}%</p>
+              <p class="text-sm font-semibold text-text-primary">{heroSubmission.memory}</p>
+              <p class="text-xs text-text-secondary">Beats {heroSubmission.memoryPercentile}%</p>
             </div>
           </div>
 
           <div class="flex items-center justify-between mt-2.5 pt-2.5 border-t border-border">
             <div class="flex items-center gap-1.5">
               <span class="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              <span class="text-xs text-text-secondary">Synced {HERO_SUBMISSION.synced}</span>
+              <span class="text-xs text-text-secondary">Synced {heroSubmission.synced}</span>
             </div>
-            <CommitShaLink sha={HERO_SUBMISSION.sha} />
+            <CommitShaLink sha={heroSubmission.sha} />
           </div>
         </div>
 
@@ -136,7 +172,7 @@ export function DashboardView({
             <button onClick={() => onNavigate('stats')} class="text-xs text-accent-blue hover:underline btn-press">View all</button>
           } />
           <div class="flex flex-col gap-1">
-            {RECENT_ACTIVITY.map((item) => (
+            {activityList.map((item) => (
               <div
                 key={item.id}
                 class="flex items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-bg-tertiary transition-colors cursor-default group"
