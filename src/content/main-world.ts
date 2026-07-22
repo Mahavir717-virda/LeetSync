@@ -147,6 +147,7 @@
 
   const pendingSubmissions = new Map<string, any>();
   const submissionTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+  const activeFetches = new Set<string>();
 
   function isSubmissionReady(sub: any): boolean {
     return Boolean(
@@ -200,14 +201,23 @@
     if (!submissionTimeouts.has(submissionId)) {
       const timeout = setTimeout(() => {
         if (!seenSubmissions.has(submissionId)) {
-          console.warn(`[LeetSync] GraphQL metadata missing after 5 seconds for ${submissionId}. Syncing with partial metadata.`);
+          console.warn(`[LeetSync] GraphQL metadata missing after 8 seconds for ${submissionId}. Syncing with partial metadata.`);
           // If we have at least the basic fields, send it
           if (sub.code && sub.status && sub.language) {
             dispatchSubmission(submissionId, sub, true);
           }
         }
-      }, 5000);
+      }, 8000);
       submissionTimeouts.set(submissionId, timeout);
+    }
+    
+    // Actively trigger a fetch if we are missing rich metadata and haven't fetched yet
+    if (!sub.difficulty || !sub.tags || sub.tags.length === 0) {
+      const slug = sub.titleSlug || extractSlugFromPage();
+      if (slug && !activeFetches.has(submissionId)) {
+        activeFetches.add(submissionId);
+        fetchProblemMetadata(slug, submissionId);
+      }
     }
 
     if (isSubmissionReady(sub)) {
@@ -223,6 +233,46 @@
         `${sub.difficulty ? '✓' : '✗'} difficulty\n` +
         `${sub.tags && sub.tags.length > 0 ? '✓' : '✗'} tags`
       );
+    }
+  }
+
+  async function fetchProblemMetadata(titleSlug: string, submissionId: string) {
+    if (!titleSlug) return;
+    
+    console.log(`[LeetSync] Actively fetching missing metadata for ${titleSlug}...`);
+    try {
+      const response = await fetch('https://leetcode.com/graphql/', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: `
+            query questionData($titleSlug: String!) {
+              question(titleSlug: $titleSlug) {
+                questionFrontendId
+                difficulty
+                topicTags {
+                  name
+                }
+              }
+            }
+          `,
+          variables: { titleSlug }
+        })
+      });
+      
+      const json = await response.json();
+      const question = json?.data?.question;
+      if (question) {
+        mergeAndSendSubmission(submissionId, {
+          questionNumber: parseInt(question.questionFrontendId || '0', 10),
+          difficulty: question.difficulty || '',
+          tags: (question.topicTags || []).map((t: any) => t.name)
+        });
+      }
+    } catch (e) {
+      console.error(`[LeetSync] Failed to actively fetch metadata:`, e);
     }
   }
 
@@ -254,10 +304,13 @@
 
     const code = data.code ?? data.typed_code ?? extractCodeFromEditor();
 
+    // Extract question number from REST response or page
+    const questionNumber = parseInt(data.question_id ?? data.frontend_question_id ?? '0', 10) || extractNumberFromPage();
+
     mergeAndSendSubmission(submissionId, {
       titleSlug: extractSlugFromPage(),
       title: extractTitleFromPage(),
-      questionNumber: 0, // Will be enriched later
+      questionNumber,
       difficulty: '',
       language: data.lang ?? '',
       code: code,
@@ -348,6 +401,23 @@
       document.querySelector('h4[class*="title"]') ??
       document.querySelector('div[class*="question-title"]');
     return titleEl?.textContent?.trim() ?? '';
+  }
+
+  /**
+   * Try to extract the problem number from the page title or heading.
+   * Matches patterns like "1. Two Sum" or "260. Single Number III".
+   */
+  function extractNumberFromPage(): number {
+    // Try the page heading first
+    const titleText = extractTitleFromPage();
+    const headingMatch = titleText.match(/^(\d+)\./); 
+    if (headingMatch) return parseInt(headingMatch[1], 10);
+
+    // Try document.title (e.g., "Two Sum - LeetCode" doesn't have number, but some do)
+    const docTitleMatch = document.title.match(/^(\d+)\./); 
+    if (docTitleMatch) return parseInt(docTitleMatch[1], 10);
+
+    return 0;
   }
 
   console.log('[LeetSync] Main world network interceptor active');
