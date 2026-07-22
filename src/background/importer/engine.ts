@@ -14,6 +14,7 @@ import { getSettings } from '@/utils/storage';
 import { githubApi } from '../github-api';
 import { generateProblemReadme } from '@/generators/readme';
 import { createManifest } from '@/generators/manifest';
+import { migrationLogger } from '../migration/logger';
 
 export class ImportEngine {
   private provider: SubmissionProvider;
@@ -152,12 +153,29 @@ export class ImportEngine {
           session.currentProblemTitle = item.title;
           item.state = ImportState.FETCHING;
 
+          migrationLogger.log('info', 'Import', `Fetching submission #${item.submissionId} (${item.title})`);
+
           const detail = await this.provider.fetchSubmissionDetail(item.submissionId, item.titleSlug);
           item.code = detail.code;
           item.runtime = detail.runtime;
           item.memory = detail.memory;
           item.difficulty = detail.difficulty;
           item.state = ImportState.DOWNLOADED;
+
+          const preview = (detail.code || '').slice(0, 150).trim();
+          migrationLogger.log('info', 'Import', `Fetched #${item.submissionId} (${item.title}): ${detail.language} (${detail.code?.length ?? 0} bytes)`);
+
+          if (!session.recentCodeLogs) session.recentCodeLogs = [];
+          session.recentCodeLogs.unshift({
+            timestamp: new Date().toLocaleTimeString(),
+            submissionId: item.submissionId,
+            title: item.title,
+            language: detail.language,
+            bytes: detail.code?.length ?? 0,
+            codePreview: preview,
+            status: 'OK',
+          });
+          if (session.recentCodeLogs.length > 50) session.recentCodeLogs.pop();
 
           // Build solution code file
           filesToCommit.push({ path: item.targetPath, content: detail.code });
@@ -171,6 +189,21 @@ export class ImportEngine {
           item.state = ImportState.UPLOADING;
         } catch (err: any) {
           console.warn(`[ImportEngine] Failed to download ${item.title}:`, err);
+          migrationLogger.log('error', 'Import', `Error downloading #${item.submissionId} (${item.title}): ${err.message}`);
+
+          if (!session.recentCodeLogs) session.recentCodeLogs = [];
+          session.recentCodeLogs.unshift({
+            timestamp: new Date().toLocaleTimeString(),
+            submissionId: item.submissionId,
+            title: item.title,
+            language: item.language,
+            bytes: 0,
+            codePreview: `// ERROR: ${err.message}`,
+            status: 'ERR',
+            error: err.message,
+          });
+          if (session.recentCodeLogs.length > 50) session.recentCodeLogs.pop();
+
           item.state = ImportState.FAILED;
           item.error = err.message;
           session.failed++;

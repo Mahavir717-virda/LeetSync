@@ -464,9 +464,42 @@ export function ImportView({ repoOwner = 'mahavir717', repoName = 'leetcode-solu
             {/* Currently Processing Problem Card */}
             <div class="flex items-center gap-3 bg-bg-tertiary rounded-xl p-3 border border-border">
               <Spinner size={14} />
-              <div class="min-w-0">
+              <div class="min-w-0 flex-1">
                 <p class="text-xs text-text-muted">Currently Downloading & Uploading:</p>
-                <p class="text-xs font-semibold text-text-primary truncate">{session?.currentProblemTitle || 'Binary Tree Paths'}</p>
+                <p class="text-xs font-semibold text-text-primary truncate">{session?.currentProblemTitle || 'Fetching problem code…'}</p>
+              </div>
+            </div>
+
+            {/* Live Terminal & Code Returned Inspector */}
+            <div class="ls-card flex flex-col gap-2">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                  <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <h4 class="text-xs font-semibold text-text-primary">Live Code Logs Inspector</h4>
+                </div>
+                <span class="text-[11px] text-text-muted">{session?.recentCodeLogs?.length || 0} entries</span>
+              </div>
+
+              {/* Console log list */}
+              <div class="bg-bg-tertiary border border-border rounded-xl p-2.5 max-h-48 overflow-y-auto flex flex-col gap-2 font-mono text-[11px]">
+                {(!session?.recentCodeLogs || session.recentCodeLogs.length === 0) ? (
+                  <p class="text-text-muted text-center py-4">Waiting for LeetCode code response logs…</p>
+                ) : (
+                  session.recentCodeLogs.map((log, idx) => (
+                    <div key={idx} class="border-b border-border/40 pb-2 last:border-0 last:pb-0 flex flex-col gap-1">
+                      <div class="flex items-center justify-between">
+                        <span class="text-text-muted">{log.timestamp}</span>
+                        <span class={`px-1.5 py-0.5 rounded text-[10px] font-bold ${log.status === 'OK' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30' : 'bg-red-500/10 text-red-400 border border-red-500/30'}`}>
+                          {log.status} #{log.submissionId}
+                        </span>
+                      </div>
+                      <p class="text-text-primary font-semibold truncate">{log.title} <span class="text-text-muted font-normal">({log.language}, {log.bytes} bytes)</span></p>
+                      <pre class="bg-bg-primary/80 border border-border/50 rounded p-1.5 text-text-secondary text-[10px] overflow-x-auto whitespace-pre-wrap max-h-20">
+                        {log.codePreview}
+                      </pre>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
 

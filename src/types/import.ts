@@ -83,6 +83,7 @@ export interface ImportSession {
   currentProblemTitle?: string;
   speedFilesPerSec?: number;
   etaSeconds?: number;
+  recentCodeLogs?: { timestamp: string; submissionId: string; title: string; language: string; bytes: number; codePreview: string; status: 'OK' | 'ERR'; error?: string }[];
 }
 
 /**

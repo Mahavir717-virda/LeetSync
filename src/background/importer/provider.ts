@@ -220,35 +220,53 @@ export class LeetCodeSubmissionProvider implements SubmissionProvider {
       }
     `;
 
-    const res = await fetch(LEETCODE_GRAPHQL_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, variables: { submissionId: parseInt(submissionId, 10) } }),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-    const json = await res.json();
-    const details = json?.data?.submissionDetails;
+    try {
+      console.log(`[LeetSync Provider] Requesting code for submission #${submissionId} (${titleSlug})`);
+      const res = await fetch(LEETCODE_GRAPHQL_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, variables: { submissionId: parseInt(submissionId, 10) } }),
+        signal: controller.signal,
+      });
 
-    if (!details || !details.code) {
-      throw new Error(`Failed to fetch code for submission ID ${submissionId}`);
+      clearTimeout(timeoutId);
+
+      const json = await res.json();
+      const details = json?.data?.submissionDetails;
+
+      if (!details || !details.code) {
+        console.warn(`[LeetSync Provider] No code found in response for #${submissionId}:`, json);
+        throw new Error(`LeetCode returned empty code for submission ID ${submissionId}`);
+      }
+
+      console.log(`[LeetSync Provider] Received code for #${submissionId}: ${details.code.length} bytes, lang=${details.lang?.name}`);
+
+      return {
+        submissionId,
+        questionNumber: parseInt(details.question?.questionId || '0', 10),
+        title: details.question?.title || titleSlug,
+        titleSlug: details.question?.titleSlug || titleSlug,
+        difficulty: (details.question?.difficulty as any) || 'Medium',
+        tags: [],
+        language: details.lang?.name || 'cpp',
+        code: details.code,
+        runtime: details.runtime || 'N/A',
+        runtimePercentile: 90,
+        memory: details.memory || 'N/A',
+        memoryPercentile: 85,
+        status: details.statusDisplay || 'Accepted',
+        timestamp: details.timestamp ? new Date(details.timestamp * 1000).toISOString() : new Date().toISOString(),
+        url: `https://leetcode.com/problems/${details.question?.titleSlug || titleSlug}/`,
+      };
+    } catch (err: any) {
+      clearTimeout(timeoutId);
+      if (err.name === 'AbortError') {
+        throw new Error(`Timeout (10s) requesting code for submission #${submissionId}`);
+      }
+      throw err;
     }
-
-    return {
-      submissionId,
-      questionNumber: parseInt(details.question?.questionId || '0', 10),
-      title: details.question?.title || titleSlug,
-      titleSlug: details.question?.titleSlug || titleSlug,
-      difficulty: (details.question?.difficulty as any) || 'Medium',
-      tags: [],
-      language: details.lang?.name || 'cpp',
-      code: details.code,
-      runtime: details.runtime || 'N/A',
-      runtimePercentile: 90,
-      memory: details.memory || 'N/A',
-      memoryPercentile: 85,
-      status: details.statusDisplay || 'Accepted',
-      timestamp: details.timestamp ? new Date(details.timestamp * 1000).toISOString() : new Date().toISOString(),
-      url: `https://leetcode.com/problems/${details.question?.titleSlug || titleSlug}/`,
-    };
   }
 }
