@@ -1,171 +1,252 @@
 /**
  * LeetSync Core Sync Engine
  *
- * Takes a detected submission, computes the version, and pushes
- * the versioned file + manifest + README to GitHub.
+ * Takes a detected submission, performs collision detection, and pushes
+ * the named solution file + manifest + README to GitHub.
+ *
+ * Now uses the Solution model (schemaVersion=2) with language-scoped subfolders
+ * and intelligent collision detection with a 60-second conflict resolution window.
  */
 
-import type { LeetCodeSubmission, ProblemManifest, ManifestSubmission } from '@/types';
+import type { LeetCodeSubmission, ProblemManifest, ConflictResolution } from '@/types';
 import { getSettings } from '@/utils/storage';
 import { addRecentSync, addSubmissionHash, hasSubmissionHash } from '@/utils/storage';
-import { submissionHash } from '@/utils/filename';
-import { buildManifestPath, buildReadmePath, buildSubmissionPath, generateVersionedFilename } from '@/utils/filename';
+import { submissionHash, buildLanguageScopedPath, buildManifestPath, buildReadmePath, getLanguageName, DEFAULT_SOLUTION_LABEL } from '@/utils/filename';
 import { getProblemDirectory } from '@/utils/folder-strategy';
-import { getLanguageName } from '@/utils/filename';
 import { githubApi } from './github-api';
 import { generateProblemReadme } from '@/generators/readme';
-import { createManifest, updateManifest } from '@/generators/manifest';
-import { addToQueue } from './queue';
+import {
+  createManifest,
+  updateManifest,
+  buildSolution,
+  buildReplacedSolution,
+  getDefaultSolution,
+  isLegacyManifest,
+  migrateLegacyManifest,
+} from '@/generators/manifest';
+import { resolveUniqueLabel } from './label-resolver';
+import { addToQueue, acquireLock, releaseLock } from './queue';
+
+// ─── Conflict Resolution Helpers ──────────────────────────────────────────────
+
+const CONFLICT_RESOLUTION_KEY = 'LEETSYNC_CONFLICT_RESOLUTION';
+const CONFLICT_TIMEOUT_MS = 60_000;
+
+/**
+ * Send a COLLISION_DETECTED message to the popup and wait up to 60 seconds
+ * for the user to resolve the conflict via the ConflictDialog.
+ *
+ * Falls back to 'replace' if the popup is not open or the user doesn't respond.
+ */
+async function requestConflictResolution(
+  submission: LeetCodeSubmission,
+  existingLabel: string,
+  existingLabels: string[]
+): Promise<ConflictResolution> {
+  // Clear any stale resolution from a previous sync
+  await new Promise<void>((resolve) =>
+    chrome.storage.local.remove(CONFLICT_RESOLUTION_KEY, resolve)
+  );
+
+  // Notify popup to show ConflictDialog
+  try {
+    chrome.runtime.sendMessage({
+      type: 'COLLISION_DETECTED',
+      payload: { submission, existingLabel, existingLabels },
+    });
+  } catch {
+    // Popup may not be open — default to replace
+  }
+
+  // Poll chrome.storage.local for up to 60 seconds for a resolution
+  const startTime = Date.now();
+  while (Date.now() - startTime < CONFLICT_TIMEOUT_MS) {
+    await new Promise((res) => setTimeout(res, 500));
+    const result = await new Promise<any>((resolve) =>
+      chrome.storage.local.get(CONFLICT_RESOLUTION_KEY, resolve)
+    );
+    const resolution = result[CONFLICT_RESOLUTION_KEY] as ConflictResolution | undefined;
+    if (resolution && resolution.submissionId === submission.submissionId) {
+      await new Promise<void>((resolve) =>
+        chrome.storage.local.remove(CONFLICT_RESOLUTION_KEY, resolve)
+      );
+      return resolution;
+    }
+  }
+
+  // Timeout — default to replace (zero friction for users who don't see the dialog)
+  console.log('[LeetSync Sync] Conflict resolution timed out — defaulting to Replace.');
+  return { submissionId: submission.submissionId, action: 'replace' };
+}
+
+// ─── Main Sync Pipeline ────────────────────────────────────────────────────────
 
 /**
  * Process a detected submission — the main sync pipeline.
  *
  * Steps:
  * 1. Validate & deduplicate
- * 2. Get or create manifest for this problem
- * 3. Compute version number
- * 4. Push solution file
- * 5. Update manifest.json
- * 6. Update per-problem README.md
- * 7. Record in recent syncs
+ * 2. Fetch or create manifest (upgrade legacy if needed)
+ * 2b. Collision detection & conflict resolution
+ * 3. Push solution file to GitHub
+ * 4. Update manifest.json
+ * 5. Update per-problem README.md
+ * 6. Record success
  */
 export async function syncSubmission(
   submission: LeetCodeSubmission
 ): Promise<{ success: boolean; error?: string }> {
   const settings = await getSettings();
 
-  // ─── Guard: Auth check ─────────────────────────────────────
+  // ─── Guard: Auth check ─────────────────────────────────────────
   if (!settings.githubToken || !settings.repoOwner || !settings.repoName) {
-    console.warn('[BG] No GitHub token or repo selected. Token:', !!settings.githubToken, 'Repo:', settings.repoOwner, '/', settings.repoName);
+    console.warn('[BG] No GitHub token or repo selected.');
     await addToQueue(submission);
     return { success: false, error: 'Not authenticated or no repo configured' };
   }
 
-  // ─── Guard: Sync mode check ────────────────────────────────
-  console.log('[BG] Sync mode:', settings.syncMode, '| Submission status:', submission.status);
+  // ─── Guard: Sync mode check ────────────────────────────────────
   if (settings.syncMode === 'accepted_only' && submission.status !== 'Accepted') {
     console.log(`[BG] Skipping non-accepted submission (${submission.status})`);
-    return { success: true }; // Not an error, just filtered out
+    return { success: true };
   }
 
-  // ─── Guard: Deduplication ──────────────────────────────────
+  // ─── Guard: Deduplication ──────────────────────────────────────
   const hash = submissionHash(submission.submissionId);
   if (await hasSubmissionHash(hash)) {
     console.log('[LeetSync Sync] Duplicate submission, skipping:', submission.submissionId);
     return { success: true };
   }
 
+  // ─── Acquire sequential mutex ──────────────────────────────────
+  const queueJobId = `sync_${submission.submissionId}`;
+  const locked = await acquireLock(queueJobId);
+  if (!locked) {
+    console.log('[LeetSync Sync] Another sync is in progress — queuing:', submission.title);
+    await addToQueue(submission);
+    return { success: true };
+  }
+
   const token = settings.githubToken;
   const owner = settings.repoOwner;
   const repo = settings.repoName;
+  const folderStructure = settings.folderStructure || 'Topic/Difficulty';
 
   try {
-    console.log(`[LeetSync Sync] 🚀 Starting sync pipeline for: "${submission.title}" (Language: ${submission.language})`);
-    console.log('[BG] Extracting info for GitHub push...');
-    const { titleSlug, language, code, questionNumber } = submission;
-    
-    // Resolve the base directory based on the user's selected folder structure strategy
-    const baseDirectory = getProblemDirectory(submission, settings.folderStructure || 'Topic');
+    console.log(`[LeetSync Sync] 🚀 Starting sync for: "${submission.title}" (${submission.language})`);
+
+    const baseDirectory = getProblemDirectory(submission, folderStructure, submission.language);
 
     // ─── Step 1: Fetch or create manifest ──────────────────────
     const manifestPath = buildManifestPath(baseDirectory);
     let manifest: ProblemManifest;
     let manifestSha: string | undefined;
 
-    console.log(`[LeetSync Sync] [Step 1/5] Fetching existing manifest from GitHub: ${manifestPath}`);
-    const existingManifest = await githubApi.getFileContent(token, owner, repo, manifestPath);
+    console.log(`[LeetSync Sync] [Step 1/5] Fetching manifest: ${manifestPath}`);
+    const existingManifestFile = await githubApi.getFileContent(token, owner, repo, manifestPath);
 
-    if (existingManifest?.content) {
-      console.log(`[LeetSync Sync] [Step 1/5] Manifest found on GitHub. Parsing content...`);
-      const decoded = githubApi.decodeFileContent(existingManifest.content);
-      manifest = JSON.parse(decoded) as ProblemManifest;
-      manifestSha = existingManifest.sha;
+    if (existingManifestFile?.content) {
+      const decoded = githubApi.decodeFileContent(existingManifestFile.content);
+      const parsed = JSON.parse(decoded);
+      manifestSha = existingManifestFile.sha;
+
+      // Auto-upgrade legacy schemaVersion=1 manifests
+      if (isLegacyManifest(parsed)) {
+        console.log('[LeetSync Sync] [Step 1/5] Legacy manifest detected — upgrading to schemaVersion=2.');
+        manifest = migrateLegacyManifest(parsed);
+      } else {
+        manifest = parsed as ProblemManifest;
+      }
     } else {
-      console.log(`[LeetSync Sync] [Step 1/5] No manifest found. Initializing a new manifest.`);
+      console.log('[LeetSync Sync] [Step 1/5] No manifest found — creating new.');
       manifest = createManifest(submission);
     }
 
-    // ─── Step 2: Compute version number ────────────────────────
-    const existingInSameLang = manifest.submissions.filter(
-      (s) => s.language === submission.language
-    );
-    const versionNumber = existingInSameLang.length + 1;
-    console.log(`[LeetSync Sync] [Step 2/5] Computed next version number: v${versionNumber}`);
+    // ─── Step 2b: Collision Detection ──────────────────────────
+    const existingDefault = getDefaultSolution(manifest, submission.language);
+    const existingGroup = manifest.solutionGroups.find(g => g.language === submission.language);
+    const existingLabels = existingGroup?.solutions.map(s => s.label) ?? [];
 
-    // ─── Step 3: Generate versioned filename and push code ─────
-    const filename = generateVersionedFilename(
-      versionNumber,
-      submission.timestamp,
-      submission.status,
-      submission.language
-    );
-    const filePath = buildSubmissionPath(
-      baseDirectory,
-      submission.language,
-      filename
-    );
+    let resolvedLabel: string = DEFAULT_SOLUTION_LABEL;
+    let conflictAction: 'first_save' | 'save_as_new' | 'replace' = 'first_save';
+    let existingFileSha: string | undefined;
+    let existingSolution = existingDefault;
 
-    const commitMessage = `${submission.title}: v${versionNumber} ${submission.status?.toLowerCase() || 'unknown'} (${getLanguageName(submission.language)}, ${submission.runtime})`;
+    if (existingDefault) {
+      // COLLISION — ask the popup for resolution
+      console.log(`[LeetSync Sync] [Step 2b] Collision detected for "${submission.language}" — requesting resolution.`);
+      const resolution = await requestConflictResolution(
+        submission, existingDefault.label, existingLabels
+      );
 
-    console.log(`[LeetSync Sync] [Step 3/5] Pushing versioned solution code: ${filePath}`);
-    console.log(`[BG] Pushing solution file to GitHub:`, { repo, owner, filePath });
+      if (resolution.action === 'replace') {
+        conflictAction = 'replace';
+        resolvedLabel = existingDefault.label;
+        existingFileSha = (await githubApi.getFileContent(token, owner, repo, existingDefault.filePath))?.sha;
+        console.log(`[LeetSync Sync] [Step 2b] Resolution: Replace "${resolvedLabel}"`);
+      } else {
+        // save_as_new — resolve unique label to avoid duplicates
+        conflictAction = 'save_as_new';
+        resolvedLabel = resolveUniqueLabel(
+          resolution.label ?? 'Solution',
+          existingGroup?.solutions ?? []
+        );
+        console.log(`[LeetSync Sync] [Step 2b] Resolution: Save As New "${resolvedLabel}"`);
+      }
+    }
+
+    // ─── Step 3: Generate path and push code ───────────────────
+    const filePath = buildLanguageScopedPath(baseDirectory, submission.language, resolvedLabel);
+    const problemDisplay = `${submission.questionNumber}. ${submission.title}`;
+
+    let commitMessage: string;
+    if (conflictAction === 'replace') {
+      commitMessage = `Update: ${problemDisplay} — ${resolvedLabel} (${getLanguageName(submission.language)})`;
+    } else if (conflictAction === 'save_as_new') {
+      commitMessage = `Add: ${problemDisplay} — ${resolvedLabel} (${getLanguageName(submission.language)})`;
+    } else {
+      commitMessage = `Add: ${problemDisplay} (${getLanguageName(submission.language)}, ${submission.difficulty})`;
+    }
+
+    console.log(`[LeetSync Sync] [Step 3/5] Pushing solution: ${filePath}`);
     const fileResult = await githubApi.createOrUpdateFile(
-      token,
-      owner,
-      repo,
-      filePath,
-      submission.code,
-      commitMessage
+      token, owner, repo, filePath,
+      submission.code, commitMessage, existingFileSha
     );
-    console.log(`[BG] Solution pushed successfully.`);
-    console.log(`[LeetSync Sync] [Step 3/5] Solution code pushed! Commit SHA: ${fileResult.commit.sha}`);
+    const newCommitSha = fileResult.commit.sha;
+    console.log(`[LeetSync Sync] [Step 3/5] Pushed! Commit: ${newCommitSha}`);
 
     // ─── Step 4: Update manifest ───────────────────────────────
-    const newEntry: ManifestSubmission = {
-      version: versionNumber,
-      language: submission.language,
-      timestamp: submission.timestamp,
-      status: submission.status,
-      runtime: submission.runtime,
-      runtimePercentile: submission.runtimePercentile,
-      memory: submission.memory,
-      memoryPercentile: submission.memoryPercentile,
-      commitSha: fileResult.commit.sha,
-      filePath,
-    };
+    let newSolution;
+    if (conflictAction === 'replace' && existingSolution) {
+      newSolution = buildReplacedSolution(existingSolution, submission, newCommitSha);
+    } else {
+      const isDefault = conflictAction === 'first_save';
+      newSolution = buildSolution(submission, resolvedLabel, filePath, isDefault, newCommitSha);
+    }
 
-    const updatedManifest = updateManifest(manifest, newEntry);
-    const manifestContent = JSON.stringify(updatedManifest, null, 2);
+    const updatedManifest = updateManifest(manifest, newSolution, conflictAction);
 
-    console.log(`[LeetSync Sync] [Step 4/5] Pushing updated manifest.json to GitHub...`);
+    console.log('[LeetSync Sync] [Step 4/5] Pushing updated manifest.json...');
     await githubApi.createOrUpdateFile(
-      token,
-      owner,
-      repo,
-      manifestPath,
-      manifestContent,
-      `Update manifest: ${submission.title} v${versionNumber}`,
+      token, owner, repo, manifestPath,
+      JSON.stringify(updatedManifest, null, 2),
+      `Update manifest: ${problemDisplay}`,
       manifestSha
     );
-    console.log(`[LeetSync Sync] [Step 4/5] Manifest updated successfully.`);
+    console.log('[LeetSync Sync] [Step 4/5] Manifest updated.');
 
     // ─── Step 5: Update per-problem README ─────────────────────
     const readmePath = buildReadmePath(baseDirectory);
-    console.log(`[LeetSync Sync] [Step 5/5] Checking existing README: ${readmePath}`);
     const existingReadme = await githubApi.getFileContent(token, owner, repo, readmePath);
     const readmeContent = generateProblemReadme(updatedManifest);
 
-    console.log(`[LeetSync Sync] [Step 5/5] Pushing updated README.md to GitHub...`);
+    console.log('[LeetSync Sync] [Step 5/5] Pushing updated README.md...');
     await githubApi.createOrUpdateFile(
-      token,
-      owner,
-      repo,
-      readmePath,
-      readmeContent,
-      `Update README: ${submission.title}`,
-      existingReadme?.sha
+      token, owner, repo, readmePath, readmeContent,
+      `Update README: ${problemDisplay}`, existingReadme?.sha
     );
-    console.log(`[LeetSync Sync] [Step 5/5] README.md updated successfully.`);
+    console.log('[LeetSync Sync] [Step 5/5] README updated.');
 
     // ─── Step 6: Record success ────────────────────────────────
     await addSubmissionHash(hash);
@@ -173,28 +254,28 @@ export async function syncSubmission(
       problemTitle: submission.title,
       problemSlug: submission.titleSlug,
       language: submission.language,
-      version: versionNumber,
+      label: resolvedLabel,
+      action: conflictAction === 'replace' ? 'replace' : conflictAction === 'save_as_new' ? 'save_as_new' : 'first_save',
       status: submission.status,
       runtime: submission.runtime,
       timestamp: submission.timestamp,
       success: true,
+      commitSha: newCommitSha,
     });
 
-    console.log(`[LeetSync Sync] ✅ Synced: ${submission.title} v${versionNumber} (${getLanguageName(submission.language)})`);
+    console.log(`[LeetSync Sync] ✅ Synced: ${problemDisplay} — "${resolvedLabel}" (${getLanguageName(submission.language)})`);
     return { success: true };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown sync error';
     console.error('[LeetSync Sync] ❌ Sync failed:', errorMessage);
 
-    // Queue for retry
     await addToQueue(submission);
-
-    // Record failure
     await addRecentSync({
       problemTitle: submission.title,
       problemSlug: submission.titleSlug,
       language: submission.language,
-      version: 0,
+      label: DEFAULT_SOLUTION_LABEL,
+      action: 'first_save',
       status: submission.status,
       runtime: submission.runtime,
       timestamp: submission.timestamp,
@@ -203,5 +284,7 @@ export async function syncSubmission(
     });
 
     return { success: false, error: errorMessage };
+  } finally {
+    await releaseLock();
   }
 }

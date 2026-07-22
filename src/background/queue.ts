@@ -13,6 +13,11 @@ const DB_NAME = 'leetsync-queue';
 const DB_VERSION = 1;
 const STORE_NAME = 'submissions';
 
+/** chrome.storage.local key for the exclusive processing mutex */
+const SYNC_LOCK_KEY = 'LEETSYNC_SYNC_LOCK';
+/** How long a job can stay in_progress before the watchdog considers it stuck (ms) */
+const STUCK_THRESHOLD_MS = 60_000;
+
 /**
  * Open (or create) the IndexedDB database.
  */
@@ -25,6 +30,42 @@ async function getDb(): Promise<IDBPDatabase> {
         store.createIndex('nextRetryAt', 'nextRetryAt');
       }
     },
+  });
+}
+
+/**
+ * Acquire the exclusive sync mutex.
+ *
+ * Prevents two parallel tasks from fetching the same Git HEAD SHA simultaneously,
+ * which would cause a 409 Non-Fast-Forward conflict on GitHub.
+ *
+ * @param jobId  The ID of the SyncQueueItem trying to acquire the lock.
+ * @returns true if the lock was acquired, false if another job holds it.
+ */
+export async function acquireLock(jobId: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(SYNC_LOCK_KEY, (result) => {
+      const current = result[SYNC_LOCK_KEY];
+      if (current) {
+        // Lock is already held
+        resolve(false);
+        return;
+      }
+      // Atomically set the lock
+      chrome.storage.local.set({ [SYNC_LOCK_KEY]: { jobId, acquiredAt: Date.now() } }, () => {
+        resolve(true);
+      });
+    });
+  });
+}
+
+/**
+ * Release the sync mutex.
+ * Must be called in a finally block after every job attempt (success or failure).
+ */
+export async function releaseLock(): Promise<void> {
+  return new Promise((resolve) => {
+    chrome.storage.local.remove(SYNC_LOCK_KEY, resolve);
   });
 }
 
@@ -67,12 +108,14 @@ export async function getPendingItems(): Promise<SyncQueueItem[]> {
 
 /**
  * Mark an item as in-progress.
+ * Records processingStartedAt for the watchdog stuck-item detector.
  */
 export async function markInProgress(id: string): Promise<void> {
   const db = await getDb();
   const item = await db.get(STORE_NAME, id);
   if (item) {
     item.status = 'in_progress';
+    item.processingStartedAt = Date.now();
     await db.put(STORE_NAME, item);
   }
 }
@@ -155,4 +198,41 @@ export async function clearDeadLetter(): Promise<void> {
     await tx.store.delete(item.id);
   }
   await tx.done;
+}
+
+/**
+ * Get items stuck in `in_progress` state for longer than STUCK_THRESHOLD_MS.
+ * Called by the chrome.alarms watchdog to detect service worker crashes mid-job.
+ * These items are reset to `pending` so they can be retried on next wakeup.
+ */
+export async function getStuckInProgressItems(): Promise<SyncQueueItem[]> {
+  const db = await getDb();
+  const allItems = await db.getAll(STORE_NAME);
+  const cutoff = Date.now() - STUCK_THRESHOLD_MS;
+  return allItems.filter(
+    (item: SyncQueueItem) =>
+      item.status === 'in_progress' &&
+      item.processingStartedAt !== undefined &&
+      item.processingStartedAt < cutoff
+  );
+}
+
+/**
+ * Reset stuck in_progress items back to pending so the watchdog can re-queue them.
+ */
+export async function resetStuckItems(): Promise<number> {
+  const db = await getDb();
+  const stuck = await getStuckInProgressItems();
+  for (const item of stuck) {
+    item.status = 'pending';
+    item.nextRetryAt = Date.now();
+    item.processingStartedAt = undefined;
+    await db.put(STORE_NAME, item);
+    console.warn(`[LeetSync Queue] Watchdog reset stuck item: ${item.id} (was in_progress > ${STUCK_THRESHOLD_MS / 1000}s)`);
+  }
+  // Also release the lock if it was held by a stuck job
+  if (stuck.length > 0) {
+    await releaseLock();
+  }
+  return stuck.length;
 }
