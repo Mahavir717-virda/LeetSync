@@ -209,6 +209,7 @@ export function App() {
           />
         ) : view === 'stats' ? (
           <StatsView
+            recentSyncs={recentSyncs}
             onNavigate={(v) => setView(v as any)}
           />
         ) : view === 'settings' ? (
