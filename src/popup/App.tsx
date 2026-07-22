@@ -189,6 +189,9 @@ export function App() {
           </div>
         ) : !authenticated || view === 'auth' ? (
           <AuthView
+            authenticated={authenticated}
+            username={settings.githubUsername}
+            avatarUrl={settings.githubAvatarUrl}
             onAuthenticated={handleAuthenticated}
             onConnectGitHub={handleConnectGitHub}
             onUsePAT={handleUsePAT}
