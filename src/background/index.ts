@@ -51,6 +51,21 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 });
 
 /**
+ * Auto-resume background import execution if service worker reloaded mid-import.
+ */
+(async () => {
+  try {
+    const activeSession = await getImportSession();
+    if (activeSession && activeSession.status === 'uploading') {
+      console.log('[LeetSync] Service worker loaded mid-import — auto-resuming background import loop');
+      importEngine.executeImport();
+    }
+  } catch (err) {
+    console.warn('[LeetSync] Error checking active import session on startup:', err);
+  }
+})();
+
+/**
  * Handle messages from content scripts and popup.
  */
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {

@@ -83,6 +83,7 @@ export class ImportEngine {
    * Phase 2 & 3 — Submission Discovery & Downloader
    */
   async startDiscovery(strategy: DuplicateStrategy = 'replace'): Promise<ImportSession> {
+    await clearImportSession();
     this.session = createNewSession(strategy);
     this.session.status = 'discovering';
     await saveImportSession(this.session);
@@ -176,6 +177,7 @@ export class ImportEngine {
             status: 'OK',
           });
           if (session.recentCodeLogs.length > 50) session.recentCodeLogs.pop();
+          await saveImportSession(session);
 
           // Build solution code file
           filesToCommit.push({ path: item.targetPath, content: detail.code });
@@ -203,6 +205,7 @@ export class ImportEngine {
             error: err.message,
           });
           if (session.recentCodeLogs.length > 50) session.recentCodeLogs.pop();
+          await saveImportSession(session);
 
           item.state = ImportState.FAILED;
           item.error = err.message;
