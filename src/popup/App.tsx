@@ -144,12 +144,23 @@ export function App() {
     }
   };
 
+  // Update settings in storage & state
+  const handleUpdateSettings = async (updates: Partial<LeetSyncSettings>) => {
+    const updated = await sendMessage<LeetSyncSettings>(MessageType.UPDATE_SETTINGS, updates);
+    if (updated) setSettings(updated);
+  };
+
+  // Logout / Disconnect account
+  const handleLogout = async () => {
+    await sendMessage(MessageType.LOGOUT);
+    setAuthenticated(false);
+    setSettings(DEFAULT_SETTINGS);
+    setView('auth');
+  };
+
   // Toggle Auto Sync
   const handleToggleAutoSync = async () => {
-    const updated = await sendMessage<LeetSyncSettings>(MessageType.UPDATE_SETTINGS, {
-      autoSync: !settings.autoSync,
-    });
-    if (updated) setSettings(updated);
+    await handleUpdateSettings({ autoSync: !settings.autoSync });
   };
 
   const repoOwner = settings.repoOwner || 'mahavir717';
@@ -158,7 +169,6 @@ export function App() {
   return (
     <div class={`mx-auto bg-bg-primary text-text-primary flex flex-col transition-all duration-300 ${
       viewportMode === 'popup' ? 'popup-mode border border-border shadow-modal rounded-xl overflow-hidden' :
-      viewportMode === 'panel' ? 'panel-mode max-w-2xl border-x border-border min-h-screen' :
       'tab-mode max-w-5xl min-h-screen'
     }`}>
       {/* Top Header */}
@@ -216,6 +226,9 @@ export function App() {
           />
         ) : view === 'settings' ? (
           <SettingsView
+            settings={settings}
+            onUpdateSettings={handleUpdateSettings}
+            onLogout={handleLogout}
             onNavigate={(v) => setView(v as any)}
             addToast={addToast}
           />

@@ -18,7 +18,7 @@ export type {
 } from './submission';
 
 // ─── Settings ──────────────────────────────────────────────────────────────────
-export type { LeetSyncSettings, SyncMode, StreakData } from './settings';
+export type { LeetSyncSettings, SyncMode, FolderStructure, StreakData } from './settings';
 export { DEFAULT_SETTINGS } from './settings';
 
 // ─── GitHub & Migration ────────────────────────────────────────────────────────

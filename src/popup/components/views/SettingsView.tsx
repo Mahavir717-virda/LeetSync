@@ -1,26 +1,102 @@
 import { h } from 'preact';
-import { useState } from 'preact/hooks';
+import { useState, useEffect } from 'preact/hooks';
 import { Toggle } from '../ui/index';
 import { ConfirmationDialog } from '../ui/dialogs';
 import type { ToastData } from '../ui/dialogs';
+import type { LeetSyncSettings, SyncMode, FolderStructure } from '@/types';
+import { DEFAULT_SETTINGS } from '@/types';
 
 interface SettingsViewProps {
+  settings?: LeetSyncSettings;
+  onUpdateSettings?: (updates: Partial<LeetSyncSettings>) => Promise<void>;
+  onLogout?: () => Promise<void>;
   onNavigate: (view: string) => void;
   addToast: (t: Omit<ToastData, 'id'>) => void;
 }
 
-export function SettingsView({ onNavigate, addToast }: SettingsViewProps) {
-  const [syncAccepted, setSyncAccepted] = useState(true);
-  const [syncDrafts, setSyncDrafts] = useState(false);
-  const [autoTags, setAutoTags] = useState(true);
-  const [commitTemplate, setCommitTemplate] = useState('{id}. {title} ({difficulty}) - {runtime}');
-  const [patToken, setPatToken] = useState('ghp_************************************');
+export function SettingsView({
+  settings = DEFAULT_SETTINGS,
+  onUpdateSettings,
+  onLogout,
+  onNavigate,
+  addToast,
+}: SettingsViewProps) {
+  const [syncMode, setSyncMode] = useState<SyncMode>(settings.syncMode || 'accepted_only');
+  const [folderStructure, setFolderStructure] = useState<FolderStructure>(settings.folderStructure || 'Topic/Difficulty');
+  const [autoSync, setAutoSync] = useState<boolean>(settings.autoSync ?? true);
+  const [notifications, setNotifications] = useState<boolean>(settings.notifications ?? true);
+  const [commitTemplate, setCommitTemplate] = useState<string>('{id}. {title} ({difficulty}) - {runtime}');
   const [showDisconnectModal, setShowDisconnectModal] = useState(false);
   const [showResetModal, setShowResetModal] = useState(false);
 
-  const handleSaveTemplate = () => {
-    addToast({ variant: 'success', title: 'Settings Saved', message: 'Commit message format updated.' });
+  useEffect(() => {
+    if (settings) {
+      setSyncMode(settings.syncMode || 'accepted_only');
+      setFolderStructure(settings.folderStructure || 'Topic/Difficulty');
+      setAutoSync(settings.autoSync ?? true);
+      setNotifications(settings.notifications ?? true);
+    }
+  }, [settings]);
+
+  const handleSaveSyncMode = async (mode: SyncMode) => {
+    setSyncMode(mode);
+    if (onUpdateSettings) {
+      await onUpdateSettings({ syncMode: mode });
+      addToast({ variant: 'success', title: 'Sync Mode Updated', message: `Set to ${mode === 'accepted_only' ? 'Accepted Only' : 'All Submissions'}.` });
+    }
   };
+
+  const handleSaveFolderStructure = async (struct: FolderStructure) => {
+    setFolderStructure(struct);
+    if (onUpdateSettings) {
+      await onUpdateSettings({ folderStructure: struct });
+      addToast({ variant: 'success', title: 'Folder Layout Updated', message: `Set to ${struct}.` });
+    }
+  };
+
+  const handleToggleAutoSync = async () => {
+    const next = !autoSync;
+    setAutoSync(next);
+    if (onUpdateSettings) {
+      await onUpdateSettings({ autoSync: next });
+      addToast({ variant: 'info', title: 'Auto-Sync', message: next ? 'Auto-sync enabled.' : 'Auto-sync disabled.' });
+    }
+  };
+
+  const handleToggleNotifications = async () => {
+    const next = !notifications;
+    setNotifications(next);
+    if (onUpdateSettings) {
+      await onUpdateSettings({ notifications: next });
+      addToast({ variant: 'info', title: 'Notifications', message: next ? 'Notifications enabled.' : 'Notifications disabled.' });
+    }
+  };
+
+  const handleSaveTemplate = () => {
+    addToast({ variant: 'success', title: 'Settings Saved', message: 'Commit message template saved.' });
+  };
+
+  const handleConfirmReset = async () => {
+    setShowResetModal(false);
+    if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+      await chrome.storage.local.remove(['leetsync_submission_hashes', 'leetsync_recent_syncs', 'leetsync_metadata_cache', 'leetsync_migration_log']);
+    }
+    addToast({ variant: 'info', title: 'Cache Cleared', message: 'Local problem manifests and logs reset.' });
+  };
+
+  const handleConfirmDisconnect = async () => {
+    setShowDisconnectModal(false);
+    if (onLogout) {
+      await onLogout();
+    }
+    addToast({ variant: 'warning', title: 'Disconnected', message: 'GitHub account removed.' });
+    onNavigate('auth');
+  };
+
+  // Mask GitHub token for security
+  const maskedToken = settings.githubToken
+    ? `${settings.githubToken.slice(0, 4)}...${settings.githubToken.slice(-4)}`
+    : 'Not authenticated';
 
   return (
     <div class="flex flex-col h-full overflow-hidden">
@@ -33,12 +109,31 @@ export function SettingsView({ onNavigate, addToast }: SettingsViewProps) {
         </button>
         <div>
           <h2 class="text-sm font-semibold text-text-primary">Advanced Settings</h2>
-          <p class="text-xs text-text-muted">Rules, formatting, and integrations</p>
+          <p class="text-xs text-text-muted">Target repository & sync rules</p>
         </div>
       </div>
 
       {/* Main Form */}
       <div class="flex-1 overflow-y-auto px-4 py-3 flex flex-col gap-5">
+
+        {/* Target Repository */}
+        <div class="flex flex-col gap-2">
+          <span class="text-xs font-semibold text-text-muted uppercase tracking-wider">Target Repository</span>
+          <div class="ls-card flex items-center justify-between">
+            <div>
+              <p class="text-xs font-medium text-text-primary">
+                {settings.repoOwner && settings.repoName ? `${settings.repoOwner}/${settings.repoName}` : 'No repo selected'}
+              </p>
+              <p class="text-[11px] text-text-muted">Layout: {settings.layoutVersion === 2 ? 'Topic/Difficulty' : 'Legacy Flat'}</p>
+            </div>
+            <button
+              onClick={() => onNavigate('auth')}
+              class="text-xs border border-border text-text-secondary rounded-lg px-2.5 py-1 hover:bg-bg-tertiary transition-colors btn-press"
+            >
+              Change Repo
+            </button>
+          </div>
+        </div>
 
         {/* Sync Rules */}
         <div class="flex flex-col gap-3">
@@ -46,26 +141,50 @@ export function SettingsView({ onNavigate, addToast }: SettingsViewProps) {
 
           <div class="ls-card flex items-center justify-between">
             <div>
-              <p class="text-xs font-medium text-text-primary">Sync Accepted Only</p>
-              <p class="text-[11px] text-text-muted">Ignore failed / wrong answer attempts</p>
+              <p class="text-xs font-medium text-text-primary">Auto Sync on Submit</p>
+              <p class="text-[11px] text-text-muted">Automatically sync accepted LeetCode submissions</p>
             </div>
-            <Toggle checked={syncAccepted} onChange={() => setSyncAccepted(!syncAccepted)} />
+            <Toggle checked={autoSync} onChange={handleToggleAutoSync} />
           </div>
 
           <div class="ls-card flex items-center justify-between">
             <div>
-              <p class="text-xs font-medium text-text-primary">Sync Code Drafts</p>
-              <p class="text-[11px] text-text-muted">Upload uncommitted workspace snapshots</p>
+              <p class="text-xs font-medium text-text-primary">Sync Mode</p>
+              <p class="text-[11px] text-text-muted">Filter which submissions are committed</p>
             </div>
-            <Toggle checked={syncDrafts} onChange={() => setSyncDrafts(!syncDrafts)} />
+            <select
+              value={syncMode}
+              onChange={(e) => handleSaveSyncMode((e.target as HTMLSelectElement).value as SyncMode)}
+              class="bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-xs text-text-primary focus:outline-none"
+            >
+              <option value="accepted_only">Accepted Only</option>
+              <option value="all_submissions">All Submissions</option>
+            </select>
           </div>
 
           <div class="ls-card flex items-center justify-between">
             <div>
-              <p class="text-xs font-medium text-text-primary">Auto-commit Tags & Topics</p>
-              <p class="text-[11px] text-text-muted">Include tags like Array, Dynamic Programming in README</p>
+              <p class="text-xs font-medium text-text-primary">Folder Structure</p>
+              <p class="text-[11px] text-text-muted">How solutions are grouped in GitHub</p>
             </div>
-            <Toggle checked={autoTags} onChange={() => setAutoTags(!autoTags)} />
+            <select
+              value={folderStructure}
+              onChange={(e) => handleSaveFolderStructure((e.target as HTMLSelectElement).value as FolderStructure)}
+              class="bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-xs text-text-primary focus:outline-none"
+            >
+              <option value="Topic/Difficulty">Topic / Difficulty</option>
+              <option value="Topic">Topic</option>
+              <option value="Difficulty">Difficulty</option>
+              <option value="Flat">Flat</option>
+            </select>
+          </div>
+
+          <div class="ls-card flex items-center justify-between">
+            <div>
+              <p class="text-xs font-medium text-text-primary">Desktop Notifications</p>
+              <p class="text-[11px] text-text-muted">Alert when a submission sync completes</p>
+            </div>
+            <Toggle checked={notifications} onChange={handleToggleNotifications} />
           </div>
         </div>
 
@@ -94,18 +213,18 @@ export function SettingsView({ onNavigate, addToast }: SettingsViewProps) {
         <div class="flex flex-col gap-2">
           <span class="text-xs font-semibold text-text-muted uppercase tracking-wider">GitHub Integration</span>
           <div class="ls-card flex flex-col gap-3">
-            <div>
-              <p class="text-xs font-medium text-text-primary">Personal Access Token (PAT)</p>
-              <p class="text-[11px] text-text-muted font-mono mt-0.5">{patToken}</p>
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-xs font-medium text-text-primary">Connected Account</p>
+                <p class="text-[11px] text-text-muted">@{settings.githubUsername || 'Not connected'}</p>
+              </div>
+              <span class="text-xs px-2 py-0.5 rounded bg-bg-tertiary border border-border font-mono text-text-secondary">
+                {settings.authMethod ? settings.authMethod.toUpperCase() : 'PAT'}
+              </span>
             </div>
             <div class="border-t border-border pt-2">
-              <div class="flex justify-between items-center text-xs mb-1">
-                <span class="text-text-muted">API Rate Limit Usage</span>
-                <span class="text-emerald-400 font-mono">4,820 / 5,000</span>
-              </div>
-              <div class="w-full h-1.5 rounded-full bg-bg-tertiary overflow-hidden">
-                <div class="h-full bg-emerald-500 rounded-full" style={{ width: '96.4%' }} />
-              </div>
+              <p class="text-xs font-medium text-text-primary mb-0.5">Token Credential</p>
+              <p class="text-[11px] text-text-muted font-mono">{maskedToken}</p>
             </div>
           </div>
         </div>
@@ -151,11 +270,7 @@ export function SettingsView({ onNavigate, addToast }: SettingsViewProps) {
         description="LeetSync will stop syncing your submissions until you log in again."
         confirmLabel="Disconnect"
         danger
-        onConfirm={() => {
-          setShowDisconnectModal(false);
-          addToast({ variant: 'warning', title: 'Disconnected', message: 'GitHub account removed.' });
-          onNavigate('auth');
-        }}
+        onConfirm={handleConfirmDisconnect}
         onCancel={() => setShowDisconnectModal(false)}
       />
 
@@ -165,10 +280,7 @@ export function SettingsView({ onNavigate, addToast }: SettingsViewProps) {
         description="This will clear your cached manifests and activity logs. Your GitHub repository will remain untouched."
         confirmLabel="Reset Cache"
         danger
-        onConfirm={() => {
-          setShowResetModal(false);
-          addToast({ variant: 'info', title: 'Cache Cleared', message: 'Local data has been reset.' });
-        }}
+        onConfirm={handleConfirmReset}
         onCancel={() => setShowResetModal(false)}
       />
     </div>
