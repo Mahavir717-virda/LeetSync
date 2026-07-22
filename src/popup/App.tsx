@@ -200,6 +200,8 @@ export function App() {
           />
         ) : view === 'migration' ? (
           <MigrationView
+            repoOwner={repoOwner}
+            repoName={repoName}
             onNavigate={(v) => setView(v as any)}
             addToast={addToast}
           />
