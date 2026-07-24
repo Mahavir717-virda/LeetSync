@@ -1,5 +1,5 @@
 {
-  "name": "leetsync",
+  "name": "gitsolve",
   "version": "1.0.0",
   "description": "Sync LeetCode submissions to GitHub with full version history. Never lose a submission again.",
   "type": "module",

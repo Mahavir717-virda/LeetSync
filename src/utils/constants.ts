@@ -3,7 +3,7 @@
  */
 
 /** Extension metadata */
-export const EXTENSION_NAME = 'LeetSync';
+export const EXTENSION_NAME = 'GitSolve';
 export const EXTENSION_VERSION = '1.0.0';
 
 /** GitHub OAuth configuration */
@@ -30,11 +30,11 @@ export const REPO_STATS_FILE = 'STATS.md';
 
 /** Default repo name when creating a new one */
 export const DEFAULT_REPO_NAME = 'leetcode-solutions';
-export const DEFAULT_REPO_DESCRIPTION = '📝 My LeetCode solutions — synced with LeetSync (version history preserved)';
+export const DEFAULT_REPO_DESCRIPTION = '📝 My LeetCode solutions — synced with GitSolve (version history preserved)';
 
 /** Sync settings */
 export const MAX_RETRY_COUNT = 10;
-export const RETRY_ALARM_NAME = 'leetsync-retry-queue';
+export const RETRY_ALARM_NAME = 'gitsolve-retry-queue';
 export const RETRY_INTERVAL_MINUTES = 5;
 export const RATE_LIMIT_THRESHOLD = 10; // Switch to batch mode below this
 

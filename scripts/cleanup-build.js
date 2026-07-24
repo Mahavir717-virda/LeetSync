@@ -6,7 +6,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, '../dist');
 
 function cleanup() {
-  console.log('[LeetSync Post-Build] Cleaning up build filenames...');
+  console.log('[GitSolve Post-Build] Cleaning up build filenames...');
 
   const manifestPath = path.join(distDir, 'manifest.json');
   if (!fs.existsSync(manifestPath)) {
@@ -71,7 +71,7 @@ function cleanup() {
   }
 
   fs.writeFileSync(manifestPath, manifestContent, 'utf8');
-  console.log('[LeetSync Post-Build] Cleanup completed successfully!');
+  console.log('[GitSolve Post-Build] Cleanup completed successfully!');
 }
 
 cleanup();

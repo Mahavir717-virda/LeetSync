@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "LeetSync",
+  "name": "GitSolve",
   "version": "1.0.0",
   "description": "Sync LeetCode submissions to GitHub with full version history. Never lose a submission again.",
   "permissions": [
