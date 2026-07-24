@@ -30,17 +30,61 @@ import { addToQueue, acquireLock, releaseLock } from './queue';
 import { fetchLeetCodeMetadata } from './migration/metadata-fetcher';
 import { topicIndex } from '@/utils/topic-index';
 import type { TopicTag } from '@/types';
+import { getProblemPreference, setProblemPreference } from '@/utils/preference-manager';
 
 // ─── Conflict Resolution Helpers ──────────────────────────────────────────────
 
 const CONFLICT_RESOLUTION_KEY = 'LEETSYNC_CONFLICT_RESOLUTION';
 const CONFLICT_TIMEOUT_MS = 60_000;
 
+const FOLDER_SELECTION_RESOLUTION_KEY = 'LEETSYNC_FOLDER_SELECTION_RESOLUTION';
+const SELECTION_TIMEOUT_MS = 60_000;
+
 /**
- * Send a COLLISION_DETECTED message to the popup and wait up to 60 seconds
- * for the user to resolve the conflict via the ConflictDialog.
+ * Send a FOLDER_SELECTION_REQUIRED message to the content script and wait up to 60 seconds
+ * for the user to resolve the folder choice.
+ */
+async function requestFolderSelection(
+  submission: LeetCodeSubmission
+): Promise<string | null> {
+  await new Promise<void>((resolve) =>
+    chrome.storage.local.remove(FOLDER_SELECTION_RESOLUTION_KEY, resolve)
+  );
+
+  try {
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const activeTab = tabs.find(t => t.url?.includes('leetcode.com/problems/'));
+    if (activeTab?.id) {
+      chrome.tabs.sendMessage(activeTab.id, {
+        type: 'FOLDER_SELECTION_REQUIRED',
+        payload: { submission },
+      });
+    }
+  } catch (_) {}
+
+  const startTime = Date.now();
+  while (Date.now() - startTime < SELECTION_TIMEOUT_MS) {
+    await new Promise((res) => setTimeout(res, 500));
+    const result = await new Promise<any>((resolve) =>
+      chrome.storage.local.get(FOLDER_SELECTION_RESOLUTION_KEY, resolve)
+    );
+    const resolution = result[FOLDER_SELECTION_RESOLUTION_KEY];
+    if (resolution && resolution.submissionId === submission.submissionId) {
+      await new Promise<void>((resolve) =>
+        chrome.storage.local.remove(FOLDER_SELECTION_RESOLUTION_KEY, resolve)
+      );
+      return resolution.selectedFolder;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Send a COLLISION_DETECTED message to the content script and wait up to 60 seconds
+ * for the user to resolve the conflict.
  *
- * Falls back to 'replace' if the popup is not open or the user doesn't respond.
+ * Falls back to 'replace' if the user doesn't respond.
  */
 async function requestConflictResolution(
   submission: LeetCodeSubmission,
@@ -52,15 +96,17 @@ async function requestConflictResolution(
     chrome.storage.local.remove(CONFLICT_RESOLUTION_KEY, resolve)
   );
 
-  // Notify popup to show ConflictDialog
+  // Notify active tab's content script to show dialog overlay
   try {
-    chrome.runtime.sendMessage({
-      type: 'COLLISION_DETECTED',
-      payload: { submission, existingLabel, existingLabels },
-    });
-  } catch {
-    // Popup may not be open — default to replace
-  }
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const activeTab = tabs.find(t => t.url?.includes('leetcode.com/problems/'));
+    if (activeTab?.id) {
+      chrome.tabs.sendMessage(activeTab.id, {
+        type: 'COLLISION_DETECTED',
+        payload: { submission, existingLabel, existingLabels },
+      });
+    }
+  } catch (_) {}
 
   // Poll chrome.storage.local for up to 60 seconds for a resolution
   const startTime = Date.now();
@@ -159,7 +205,23 @@ export async function syncSubmission(
       }
     }
 
-    const baseDirectory = getProblemDirectory(submission, folderStructure, settings.topicMappings, submission.language);
+    // ─── Resolve Target Folder Preference ──────────────────────
+    let chosenFolder = await getProblemPreference(submission.questionNumber);
+
+    if (!chosenFolder && submission.topicTags && submission.topicTags.length > 1) {
+      console.log(`[LeetSync Sync] Multi-topic problem without preference — requesting folder selection.`);
+      const userSelected = await requestFolderSelection(submission);
+      if (userSelected) {
+        chosenFolder = userSelected;
+        await setProblemPreference(submission.questionNumber, userSelected);
+      }
+    }
+
+    const customMappings = chosenFolder 
+      ? { ...(settings.topicMappings || {}), [submission.topicTags[0]?.slug ?? '']: chosenFolder }
+      : settings.topicMappings;
+
+    const baseDirectory = getProblemDirectory(submission, folderStructure, customMappings, submission.language);
 
     // ─── Step 1: Fetch or create manifest ──────────────────────
     const manifestPath = buildManifestPath(baseDirectory);

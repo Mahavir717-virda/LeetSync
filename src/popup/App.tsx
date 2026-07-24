@@ -10,6 +10,7 @@ import { MigrationView } from './components/views/MigrationView';
 import { ImportView } from './components/views/ImportView';
 import { SettingsView } from './components/views/SettingsView';
 import { ToastContainer, useToast } from './components/ui/dialogs';
+import type { LeetCodeSubmission } from '@/types';
 
 /**
  * Send a message to the Chrome extension background service worker.
@@ -91,7 +92,10 @@ export function App() {
         }
       };
       chrome.storage.onChanged.addListener(storageListener);
-      return () => chrome.storage.onChanged.removeListener(storageListener);
+
+      return () => {
+        chrome.storage.onChanged.removeListener(storageListener);
+      };
     }
   }, []);
 

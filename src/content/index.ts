@@ -9,6 +9,7 @@
 import { MessageType } from '@/utils/constants';
 import type { LeetCodeSubmission } from '@/types';
 import { showAcceptedAnimation } from '@/animation/accepted';
+import { injectFolderPickerDialog, injectConflictResolutionDialog } from './prompt-injector';
 
 console.log('[LeetSync] Content script loaded on:', window.location.href);
 
@@ -59,6 +60,33 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       github: true,
     });
 
+    sendResponse({ received: true });
+  }
+
+  if (message?.type === 'FOLDER_SELECTION_REQUIRED') {
+    console.log('[LeetSync] In-page folder selection required for:', message.payload.submission.title);
+    injectFolderPickerDialog(message.payload.submission, (folder) => {
+      chrome.storage.local.set({
+        LEETSYNC_FOLDER_SELECTION_RESOLUTION: {
+          submissionId: message.payload.submission.submissionId,
+          selectedFolder: folder,
+        }
+      });
+    });
+    sendResponse({ received: true });
+  }
+
+  if (message?.type === 'COLLISION_DETECTED') {
+    console.log('[LeetSync] In-page collision resolution required for:', message.payload.submission.title);
+    injectConflictResolutionDialog(message.payload.submission, message.payload.existingSolutions || [], (action, label) => {
+      chrome.storage.local.set({
+        LEETSYNC_CONFLICT_RESOLUTION: {
+          submissionId: message.payload.submission.submissionId,
+          action,
+          label,
+        }
+      });
+    });
     sendResponse({ received: true });
   }
 });

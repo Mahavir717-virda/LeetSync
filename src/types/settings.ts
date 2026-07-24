@@ -38,6 +38,8 @@ export interface LeetSyncSettings {
   topicMappings: Record<string, string>;
   /** Organization strategy version */
   organizationStrategyVersion: number;
+  /** Cached repository folder preferences indexed by problem number */
+  cachedPreferences: Record<string, string>;
 }
 
 export type SyncMode = 'accepted_only' | 'all_submissions';
@@ -75,6 +77,7 @@ export const DEFAULT_SETTINGS: LeetSyncSettings = {
   },
   topicMappings: {},
   organizationStrategyVersion: 1,
+  cachedPreferences: {},
 };
 
 /**

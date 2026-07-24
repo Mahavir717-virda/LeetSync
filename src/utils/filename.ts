@@ -136,7 +136,7 @@ export function buildLanguageScopedPath(
 ): string {
   const langFolder = getLanguageFolder(language);
   const filename = buildLabeledFilename(label, language);
-  return `${problemDir}/${langFolder}/${filename}`;
+  return `${problemDir}/solutions/${langFolder}/${filename}`;
 }
 
 // ─── Legacy Path Builders (kept for backward compatibility) ───────────────────
