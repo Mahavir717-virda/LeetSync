@@ -21,6 +21,8 @@ import { MigrationController } from './safety';
 import { executeMigration } from './executor';
 import { executeRollback } from './rollback';
 import { migrationLogger } from './logger';
+import { primaryTopicResolver } from '@/utils/topic-resolver';
+import type { ProblemManifest } from '@/types';
 import { getSettings, getMigrationPlan, saveMigrationPlan, getRollbackPlan } from '@/utils/storage';
 import type { MigrationPlan } from '@/types';
 import { githubApi } from '../github-api';
@@ -173,35 +175,41 @@ export async function handleRegenerateStats(): Promise<{ success: boolean; error
     }
 
     const { generateRootReadme, generateStats } = await import('@/generators/readme');
-    const manifests = plan.moves.map((move) => ({
-      number: move.problem.questionNumber,
-      title: move.metadata?.title || move.problem.slug,
-      slug: move.problem.slug,
-      difficulty: (move.metadata?.difficulty || 'Easy') as 'Easy' | 'Medium' | 'Hard',
-      tags: move.metadata?.topicTags || [],
-      url: `https://leetcode.com/problems/${move.problem.slug}/`,
-      schemaVersion: 2 as const,
-      solutionGroups: [{
-        language: move.files[0]?.targetPath.split('.').pop() || 'txt',
-        solutions: move.files.map((f, i) => ({
-          id: `migration_${i}_${f.targetPath}`,
-          label: i === 0 ? 'Default' : `Solution ${i + 1}`,
-          language: f.targetPath.split('.').pop() || 'txt',
-          filePath: f.targetPath,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          isDefault: i === 0,
-          runtime: 'N/A',
-          memory: 'N/A',
-          runtimePercentile: 0,
-          memoryPercentile: 0,
-          commitSha: f.sourceSha,
-          previousCommitSha: null,
-          submissionId: `migration_${f.sourceSha}`,
-        })),
-      }],
-    }));
-
+    const manifests: ProblemManifest[] = plan.moves.map((move) => {
+      const topicTags = move.metadata?.topicTags || [];
+      const folderTopic = primaryTopicResolver.resolveFolder(topicTags);
+      return {
+        number: move.problem.questionNumber,
+        title: move.metadata?.title || move.problem.slug,
+        slug: move.problem.slug,
+        difficulty: (move.metadata?.difficulty || 'Easy') as 'Easy' | 'Medium' | 'Hard',
+        folderTopic,
+        topicTags,
+        tags: topicTags.map(t => t.name),
+        url: `https://leetcode.com/problems/${move.problem.slug}/`,
+        schemaVersion: 2,
+        organizationStrategyVersion: 1,
+        solutionGroups: [{
+          language: move.files[0]?.targetPath.split('.').pop() || 'txt',
+          solutions: move.files.map((f, i) => ({
+            id: `migration_${i}_${f.targetPath}`,
+            label: i === 0 ? 'Default' : `Solution ${i + 1}`,
+            language: f.targetPath.split('.').pop() || 'txt',
+            filePath: f.targetPath,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            isDefault: i === 0,
+            runtime: 'N/A',
+            memory: 'N/A',
+            runtimePercentile: 0,
+            memoryPercentile: 0,
+            commitSha: f.sourceSha,
+            previousCommitSha: null,
+            submissionId: `migration_${f.sourceSha}`,
+          })),
+        }],
+      };
+    });
 
     const readmeContent = generateRootReadme(manifests, settings.githubUsername || 'User');
     const statsContent = generateStats(manifests);

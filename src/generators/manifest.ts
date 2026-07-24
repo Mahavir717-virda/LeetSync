@@ -1,21 +1,15 @@
-/**
- * Problem Manifest Generator
- *
- * Creates and updates the manifest.json file (schemaVersion=2) for each problem folder.
- * Uses the new Solution model with LanguageSolutionGroup organization.
- *
- * Maintains backward-compat read support for schemaVersion=1 (legacy ManifestSubmission[]).
- */
-
 import type {
   LeetCodeSubmission,
   ProblemManifest,
   LanguageSolutionGroup,
   Solution,
   LegacyProblemManifest,
+  TopicTag,
+  FolderTopic,
 } from '@/types';
 import { buildLanguageScopedPath, DEFAULT_SOLUTION_LABEL } from '@/utils/filename';
 import { getProblemDirectory } from '@/utils/folder-strategy';
+import { primaryTopicResolver } from '@/utils/topic-resolver';
 
 // ─── Schema Version ────────────────────────────────────────────────────────────
 
@@ -28,15 +22,30 @@ const CURRENT_SCHEMA_VERSION = 2;
  * Called when no manifest.json exists in the GitHub repo yet.
  */
 export function createManifest(submission: LeetCodeSubmission): ProblemManifest {
+  const topicTags = submission.topicTags ?? [];
+  const folderTopic = primaryTopicResolver.resolveFolder(topicTags);
+
   return {
     slug: submission.titleSlug,
     title: submission.title,
     number: submission.questionNumber,
     difficulty: submission.difficulty,
-    tags: submission.tags,
+    tags: topicTags.map(t => t.name), // kept for backwards compatibility
+    folderTopic,
+    topicTags,
+    problemMetadata: submission._rawMetadata ? {
+      difficulty: submission.difficulty,
+      topicTags,
+      paidOnly: submission._rawMetadata.paidOnly,
+      categoryTitle: submission._rawMetadata.categoryTitle,
+      likes: submission._rawMetadata.likes,
+      dislikes: submission._rawMetadata.dislikes,
+      capturedAt: new Date().toISOString()
+    } : undefined,
     url: submission.url.split('/description')[0].split('/submissions')[0],
     solutionGroups: [],
     schemaVersion: CURRENT_SCHEMA_VERSION,
+    organizationStrategyVersion: 1,
   };
 }
 
@@ -44,19 +53,6 @@ export function createManifest(submission: LeetCodeSubmission): ProblemManifest 
 
 /**
  * Add or update a Solution entry in the manifest.
- *
- * If action === 'replace':
- *   - Find the existing solution by ID in the language group.
- *   - Update its commitSha, previousCommitSha, runtime, memory, updatedAt.
- *   - Do NOT change label or isDefault.
- *
- * If action === 'first_save' or 'save_as_new':
- *   - Create a new Solution entry.
- *   - For first_save: label='Default', isDefault=true.
- *   - For save_as_new: label=chosen label, isDefault=false.
- *   - If no group exists for this language yet, create it.
- *
- * Returns a new immutable manifest (does not mutate the input).
  */
 export function updateManifest(
   manifest: ProblemManifest,
@@ -103,12 +99,6 @@ export function updateManifest(
 
 /**
  * Build a new Solution object from a LeetCode submission.
- *
- * @param submission    The raw LeetCode submission data.
- * @param label         The chosen label ('Default', 'Optimal', 'BFS', etc.).
- * @param filePath      The full repo-relative path for the file.
- * @param isDefault     Whether this is the default solution for its language.
- * @param commitSha     The GitHub commit SHA after the file was pushed.
  */
 export function buildSolution(
   submission: LeetCodeSubmission,
@@ -138,7 +128,6 @@ export function buildSolution(
 
 /**
  * Build an updated Solution for a Replace action.
- * Shifts the SHA chain: existing commitSha → previousCommitSha.
  */
 export function buildReplacedSolution(
   existing: Solution,
@@ -199,12 +188,6 @@ export function getTotalSolutionCount(manifest: ProblemManifest): number {
 
 /**
  * Upgrade a schemaVersion=1 manifest (flat ManifestSubmission[]) to schemaVersion=2.
- *
- * Migration rules:
- *  - Each unique language gets its own LanguageSolutionGroup.
- *  - The first submission per language becomes isDefault=true with label='Default'.
- *  - Subsequent submissions per language get label='Solution v{n}' and isDefault=false.
- *  - previousCommitSha is null for all (no history data available in v1).
  */
 export function migrateLegacyManifest(legacy: LegacyProblemManifest): ProblemManifest {
   const groupMap = new Map<string, Solution[]>();
@@ -241,15 +224,57 @@ export function migrateLegacyManifest(legacy: LegacyProblemManifest): ProblemMan
     ([language, solutions]) => ({ language, solutions })
   );
 
+  const topicTags: TopicTag[] = (legacy.tags ?? []).map(t => ({
+    name: t,
+    slug: t.toLowerCase().replace(/\s+/g, '-'),
+  }));
+
+  const folderTopic = primaryTopicResolver.resolveFolder(topicTags);
+
   return {
     slug: legacy.slug,
     title: legacy.title,
     number: legacy.number,
     difficulty: legacy.difficulty,
     tags: legacy.tags,
+    folderTopic,
+    topicTags,
     url: legacy.url,
     solutionGroups,
     schemaVersion: CURRENT_SCHEMA_VERSION,
+    organizationStrategyVersion: 1,
+  };
+}
+
+/**
+ * Normalise a raw manifest parsed from GitHub.
+ * Handles schemaVersion=1 (tags[]) and schemaVersion=2 (topicTags) gracefully.
+ */
+export function normalizeManifest(raw: any): ProblemManifest {
+  if (isLegacyManifest(raw)) {
+    return migrateLegacyManifest(raw);
+  }
+
+  // Backfill topicTags from legacy tags[]
+  const topicTags: TopicTag[] = Array.isArray(raw.topicTags) && raw.topicTags.length > 0
+    ? raw.topicTags
+    : (raw.tags ?? []).map((t: string) => ({
+        name: t,
+        slug: t.toLowerCase().replace(/\s+/g, '-'),
+      }));
+
+  // Backfill folderTopic
+  const folderTopic: FolderTopic = raw.folderTopic ?? {
+    strategy: 'PRIMARY_TOPIC',
+    value: primaryTopicResolver.resolveFolder(topicTags).value,
+  };
+
+  return {
+    ...raw,
+    topicTags,
+    folderTopic,
+    organizationStrategyVersion: raw.organizationStrategyVersion ?? 1,
+    schemaVersion: raw.schemaVersion ?? CURRENT_SCHEMA_VERSION,
   };
 }
 

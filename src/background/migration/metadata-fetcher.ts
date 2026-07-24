@@ -5,7 +5,7 @@
 import { githubApi } from '../github-api';
 import { getCachedMetadata, setMetadataCache } from '@/utils/storage';
 import { LEETCODE_GRAPHQL_URL } from '@/utils/constants';
-import type { ProblemMetadata, ScannedProblem, GitHubTreeEntry } from '@/types';
+import type { ProblemMetadata, ScannedProblem, GitHubTreeEntry, TopicTag } from '@/types';
 
 /**
  * Fetch problem metadata from LeetCode GraphQL API.
@@ -47,8 +47,13 @@ export async function fetchLeetCodeMetadata(slug: string): Promise<ProblemMetada
 
     const rawDifficulty = q.difficulty ?? q.questionDifficulty ?? q.stats?.difficulty;
     const difficulty = (['Easy', 'Medium', 'Hard'].includes(rawDifficulty) ? rawDifficulty : 'Medium') as 'Easy' | 'Medium' | 'Hard';
-    const topicTags = Array.isArray(q.topicTags) && q.topicTags.length > 0
-      ? q.topicTags.map((t: any) => typeof t === 'string' ? t : (t?.name || t?.slug || '')).filter(Boolean)
+    const topicTags: TopicTag[] = Array.isArray(q.topicTags)
+      ? q.topicTags.map((t: any) => ({
+          name: typeof t === 'string' ? t : (t?.name ?? ''),
+          slug: typeof t === 'string'
+            ? t.toLowerCase().replace(/\s+/g, '-')
+            : (t?.slug ?? t?.name?.toLowerCase().replace(/\s+/g, '-') ?? ''),
+        })).filter((t: any) => t.name && t.slug)
       : [];
     const resolvedSlug = q.titleSlug || slug;
     const resolvedTitle = q.title || slug;
@@ -88,12 +93,18 @@ export async function findRepoMetadata(
     const content = githubApi.decodeFileContent(blob.content);
     const manifest = JSON.parse(content);
     if (manifest && manifest.title) {
+      const topicTags: TopicTag[] = Array.isArray(manifest.topicTags)
+        ? manifest.topicTags
+        : (manifest.tags ?? manifest.topics ?? []).map((t: string) => ({
+            name: t,
+            slug: t.toLowerCase().replace(/\s+/g, '-'),
+          }));
       return {
         slug,
         title: manifest.title || slug,
         questionNumber: manifest.questionNumber || 0,
         difficulty: manifest.difficulty || 'Easy',
-        topicTags: manifest.topics || [],
+        topicTags,
         fetched: true,
         source: 'repository',
       };
@@ -141,7 +152,7 @@ export async function resolveProblemMetadata(
     title: problem.slug,
     questionNumber: problem.questionNumber,
     difficulty: 'Easy',
-    topicTags: ['Uncategorized'],
+    topicTags: [{ name: 'Uncategorized', slug: 'uncategorized' }],
     fetched: false,
     source: 'unknown',
     error: 'Metadata resolution failed across all sources',

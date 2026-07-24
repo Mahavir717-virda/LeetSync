@@ -141,10 +141,14 @@ export interface SolutionFilterOptions {
   language?: string;    // LeetCode language slug
   label?: string;       // Exact label match (case-insensitive)
   defaultOnly?: boolean; // Show only isDefault solutions
+  /** Filter by LeetCode topic slug or partial name */
+  topic?: string;
 }
 
+import { topicIndex } from './topic-index';
+
 /**
- * Filter manifests by search query, language, label, and default-only flag.
+ * Filter manifests by search query, language, label, default-only flag, and topic.
  * Returns a new array of manifests with non-matching solutions stripped.
  * Manifests with no remaining solutions after filtering are removed.
  */
@@ -152,11 +156,22 @@ export function filterManifests(
   manifests: ProblemManifest[],
   options: SolutionFilterOptions
 ): ProblemManifest[] {
-  const { query, language, label, defaultOnly } = options;
+  const { query, language, label, defaultOnly, topic } = options;
   const queryLower = query?.toLowerCase().trim();
+
+  // Pre-filter by topic using O(1) index lookup
+  let topicAllowedSlugs: Set<string> | null = null;
+  if (topic) {
+    topicAllowedSlugs = topicIndex.query(topic);
+  }
 
   return manifests
     .map((manifest) => {
+      // If a topic filter was provided and this manifest slug isn't matched by it, exclude it
+      if (topicAllowedSlugs !== null && !topicAllowedSlugs.has(manifest.slug)) {
+        return null;
+      }
+
       // Filter by problem title query first
       const titleMatches = !queryLower || manifest.title.toLowerCase().includes(queryLower);
 

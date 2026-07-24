@@ -2,6 +2,8 @@
 export type {
   LeetCodeSubmission,
   SubmissionStatus,
+  TopicTag,
+  FolderTopic,
   // New Solution model (schemaVersion=2)
   Solution,
   LanguageSolutionGroup,

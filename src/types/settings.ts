@@ -34,6 +34,10 @@ export interface LeetSyncSettings {
   lastSyncTimestamp: string | null;
   /** Streak data */
   streak: StreakData;
+  /** User-defined topic slug -> folder name overrides */
+  topicMappings: Record<string, string>;
+  /** Organization strategy version */
+  organizationStrategyVersion: number;
 }
 
 export type SyncMode = 'accepted_only' | 'all_submissions';
@@ -69,6 +73,8 @@ export const DEFAULT_SETTINGS: LeetSyncSettings = {
     longest: 0,
     lastSyncDate: null,
   },
+  topicMappings: {},
+  organizationStrategyVersion: 1,
 };
 
 /**

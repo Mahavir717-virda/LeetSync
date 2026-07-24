@@ -6,6 +6,26 @@
  * set-default, version recovery, analytics — is built on top of this model.
  */
 
+export interface TopicTag {
+  name: string;
+  slug: string;
+}
+
+export interface FolderTopic {
+  strategy: 'PRIMARY_TOPIC' | 'CUSTOM_MAPPING' | 'DIFFICULTY_ONLY' | 'FLAT' | 'CONTEST';
+  value: string;
+}
+
+export interface ProblemMetadata {
+  difficulty: 'Easy' | 'Medium' | 'Hard';
+  topicTags: TopicTag[];
+  paidOnly: boolean;
+  categoryTitle: string;
+  likes: number;
+  dislikes: number;
+  capturedAt: string;
+}
+
 // ─── Raw LeetCode Submission (captured from network) ──────────────────────────
 
 /**
@@ -23,8 +43,10 @@ export interface LeetCodeSubmission {
   questionNumber: number;
   /** Difficulty level */
   difficulty: 'Easy' | 'Medium' | 'Hard';
-  /** Problem tags/topics */
-  tags: string[];
+  /** @deprecated Use topicTags instead */
+  tags?: string[];
+  /** Problem tags/topics structured */
+  topicTags: TopicTag[];
   /** LeetCode language slug (e.g., "python3", "java", "cpp") */
   language: string;
   /** The submitted source code */
@@ -45,6 +67,8 @@ export interface LeetCodeSubmission {
   url: string;
   /** Optional contest title if submission originates from a contest (e.g. "Weekly Contest 463") */
   contestName?: string | null;
+  /** Raw metadata captured at intercept time */
+  _rawMetadata?: Omit<ProblemMetadata, 'capturedAt'> | null;
 }
 
 export type SubmissionStatus =
@@ -180,7 +204,11 @@ export interface ProblemManifest {
   title: string;
   number: number;
   difficulty: 'Easy' | 'Medium' | 'Hard';
-  tags: string[];
+  /** @deprecated Use topicTags & folderTopic instead */
+  tags?: string[];
+  folderTopic: FolderTopic;
+  topicTags: TopicTag[];
+  problemMetadata?: ProblemMetadata;
   url: string;
   /** Solutions organized by language — one group per language used. */
   solutionGroups: LanguageSolutionGroup[];
@@ -190,6 +218,7 @@ export interface ProblemManifest {
    * 2 = current Solution model with solutionGroups.
    */
   schemaVersion: number;
+  organizationStrategyVersion: number;
 }
 
 // ─── Conflict Resolution (Background ↔ Popup messaging) ───────────────────────

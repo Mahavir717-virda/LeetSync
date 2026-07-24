@@ -1,64 +1,9 @@
-import type { LeetCodeSubmission } from '../types/submission';
+import type { LeetCodeSubmission, TopicTag } from '../types/submission';
 import type { FolderStructure } from '../types/settings';
 import { getLanguageName, sanitizeSlug } from './filename';
+import { primaryTopicResolver } from './topic-resolver';
 
-const TOPIC_PRIORITY = [
-  'String',
-  'Array',
-  'Hash Table',
-  'Linked List',
-  'Tree',
-  'Graph',
-  'Heap',
-  'Stack',
-  'Queue',
-  'Binary Search',
-  'Dynamic Programming',
-  'Greedy',
-  'Backtracking',
-  'Trie',
-  'Math',
-  'Bit Manipulation',
-  'Geometry',
-  'Database',
-  'Shell',
-  'Concurrency'
-];
-
-/** Map of normalized lower-case tag aliases to canonical display names */
-const CANONICAL_TOPICS: Record<string, string> = {
-  'string': 'String',
-  'array': 'Array',
-  'hash-table': 'Hash Table',
-  'hashtable': 'Hash Table',
-  'linked-list': 'Linked List',
-  'linkedlist': 'Linked List',
-  'tree': 'Tree',
-  'binary-tree': 'Tree',
-  'graph': 'Graph',
-  'heap': 'Heap',
-  'priority-queue': 'Heap',
-  'stack': 'Stack',
-  'queue': 'Queue',
-  'binary-search': 'Binary Search',
-  'dynamic-programming': 'Dynamic Programming',
-  'dp': 'Dynamic Programming',
-  'greedy': 'Greedy',
-  'backtracking': 'Backtracking',
-  'trie': 'Trie',
-  'math': 'Math',
-  'bit-manipulation': 'Bit Manipulation',
-  'geometry': 'Geometry',
-  'database': 'Database',
-  'shell': 'Shell',
-  'concurrency': 'Concurrency',
-};
-
-/**
- * Format and normalize raw contest slugs/names into clean display folder names.
- * "weekly-contest-463" → "Weekly Contest 463"
- * "biweekly-contest-165" → "Biweekly Contest 165"
- */
+/** Format and normalize raw contest slugs/names into clean display folder names. */
 export function formatContestName(raw?: string | null): string | null {
   if (!raw || typeof raw !== 'string') return null;
   const clean = raw.trim();
@@ -71,10 +16,7 @@ export function formatContestName(raw?: string | null): string | null {
     .join(' ');
 }
 
-/**
- * Normalize and categorize problem difficulty.
- * Guaranteed to return 'Easy' | 'Medium' | 'Hard' | 'Imported'. Never returns 'Unknown'.
- */
+/** Normalize and categorize problem difficulty. */
 export function normalizeDifficulty(diff?: string | null): 'Easy' | 'Medium' | 'Hard' | 'Imported' {
   if (!diff || typeof diff !== 'string') return 'Imported';
   const clean = diff.trim().toLowerCase();
@@ -90,19 +32,14 @@ export function normalizeDifficulty(diff?: string | null): 'Easy' | 'Medium' | '
   }
 }
 
-/**
- * Clean up topic names for valid folder creation.
- */
+/** Clean up topic names for valid folder creation. */
 export function sanitizeFolderName(name?: string | null): string {
   if (!name || typeof name !== 'string') return 'General';
   const cleaned = name.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9-]/g, '');
   return cleaned || 'General';
 }
 
-/**
- * Sanitize a language display name for use as a folder name.
- * "C++" → "Cpp", "C#" → "Csharp", "Python" → "Python"
- */
+/** Sanitize a language display name for use as a folder name. */
 export function sanitizeLanguageFolder(language?: string | null): string {
   if (!language || typeof language !== 'string') return 'Other';
   const displayName = getLanguageName(language) || language || 'Other';
@@ -116,43 +53,14 @@ export function sanitizeLanguageFolder(language?: string | null): string {
 
 /**
  * Determine the primary topic for a submission based on priority.
- * Performs case-insensitive matching against canonical topics.
+ * @deprecated Pass TopicTag[] to getProblemDirectory instead.
  */
 export function getPrimaryTopic(tags?: string[] | null): string {
-  if (!tags || !Array.isArray(tags) || tags.length === 0) return 'General';
-
-  const normalizedTags = tags
-    .filter(Boolean)
-    .map(t => t.toString().trim())
-    .filter(t => t.length > 0);
-
-  if (normalizedTags.length === 0) return 'General';
-
-  // If "String" or "string" is in the tags, String takes top priority!
-  const hasStringTag = normalizedTags.some(t => t.toLowerCase() === 'string');
-  if (hasStringTag) {
-    return 'String';
-  }
-
-  let highestPriorityIndex = Infinity;
-  let bestTopic = normalizedTags[0];
-
-  for (const tag of normalizedTags) {
-    const lowerTag = tag.toLowerCase().replace(/\s+/g, '-');
-    const canonicalName = CANONICAL_TOPICS[lowerTag] || tag;
-    
-    // Case-insensitive match against TOPIC_PRIORITY
-    const priorityIndex = TOPIC_PRIORITY.findIndex(
-      p => p.toLowerCase() === canonicalName.toLowerCase() || p.toLowerCase() === lowerTag
-    );
-
-    if (priorityIndex !== -1 && priorityIndex < highestPriorityIndex) {
-      highestPriorityIndex = priorityIndex;
-      bestTopic = canonicalName;
-    }
-  }
-
-  return sanitizeFolderName(bestTopic);
+  const topicTags: TopicTag[] = (tags ?? []).map(t => ({
+    name: t,
+    slug: t.toLowerCase().replace(/\s+/g, '-'),
+  }));
+  return primaryTopicResolver.resolveFolder(topicTags).value;
 }
 
 /**
@@ -165,8 +73,11 @@ export function getProblemDirectory(
     title?: string;
     questionNumber?: number;
     contestName?: string | null;
+    topicTags?: TopicTag[];
+    tags?: string[];
   },
   structure: FolderStructure,
+  customMappings?: Record<string, string>,
   _language?: string
 ): string {
   // 1. Diagnostic log for missing metadata tracing
@@ -193,7 +104,7 @@ export function getProblemDirectory(
   const paddedNumber = String(questionNum).padStart(4, '0');
   const problemFolder = `${paddedNumber}-${slug}`;
 
-  // 3. Contest Folder Routing (Automatic for contest submissions or structure === 'Contest')
+  // 3. Contest Folder Routing
   if (submission.contestName || structure === 'Contest') {
     const contestFolder = formatContestName(submission.contestName) || 'General Contest';
     return `Contest/${contestFolder}/${problemFolder}`;
@@ -203,7 +114,10 @@ export function getProblemDirectory(
   const difficulty = normalizeDifficulty(submission.difficulty);
 
   // 5. Topic Folder Normalization
-  const topic = getPrimaryTopic(submission.tags);
+  const topicTags: TopicTag[] = submission.topicTags ?? 
+    (submission.tags ?? []).map(t => ({ name: t, slug: t.toLowerCase().replace(/\s+/g, '-') }));
+  const folderTopic = primaryTopicResolver.resolveFolder(topicTags, customMappings);
+  const topic = sanitizeFolderName(folderTopic.value);
 
   switch (structure) {
     case 'Flat':

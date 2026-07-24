@@ -268,25 +268,30 @@
     console.log(`[LeetSync] Actively fetching missing metadata for ${titleSlug}...`);
     try {
       const response = await fetch('/graphql/', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-csrftoken': getCsrfToken()
-        },
-        body: JSON.stringify({
-          query: `
-            query questionData($titleSlug: String!) {
-              question(titleSlug: $titleSlug) {
-                questionFrontendId
-                difficulty
-                topicTags {
-                  name
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-csrftoken': getCsrfToken()
+          },
+          body: JSON.stringify({
+            query: `
+              query questionData($titleSlug: String!) {
+                question(titleSlug: $titleSlug) {
+                  questionFrontendId
+                  difficulty
+                  isPaidOnly
+                  categoryTitle
+                  likes
+                  dislikes
+                  topicTags {
+                    name
+                    slug
+                  }
                 }
               }
-            }
-          `,
-          variables: { titleSlug }
-        })
+            `,
+            variables: { titleSlug }
+          })
       });
       
       const json = await response.json();
@@ -295,7 +300,21 @@
         mergeAndSendSubmission(submissionId, {
           questionNumber: parseInt(question.questionFrontendId || '0', 10),
           difficulty: question.difficulty || '',
-          tags: (question.topicTags || []).map((t: any) => t.name)
+          topicTags: (question.topicTags || []).map((t: any) => ({
+            name: t.name ?? '',
+            slug: t.slug ?? t.name?.toLowerCase().replace(/\s+/g, '-') ?? '',
+          })),
+          _rawMetadata: {
+            difficulty: question.difficulty || 'Medium',
+            topicTags: (question.topicTags || []).map((t: any) => ({
+              name: t.name ?? '',
+              slug: t.slug ?? t.name?.toLowerCase().replace(/\s+/g, '-') ?? '',
+            })),
+            paidOnly: question.isPaidOnly ?? false,
+            categoryTitle: question.categoryTitle ?? '',
+            likes: question.likes ?? 0,
+            dislikes: question.dislikes ?? 0,
+          }
         });
       }
     } catch (e) {
@@ -381,7 +400,21 @@
       title: details.question?.title ?? extractTitleFromPage(),
       questionNumber: parseInt(details.question?.questionFrontendId ?? '0', 10),
       difficulty: details.question?.difficulty ?? '',
-      tags: (details.question?.topicTags ?? []).map((t: any) => t.name ?? t.slug),
+      topicTags: (details.question?.topicTags ?? []).map((t: any) => ({
+        name: t.name ?? '',
+        slug: t.slug ?? t.name?.toLowerCase().replace(/\s+/g, '-') ?? '',
+      })),
+      _rawMetadata: details.question ? {
+        difficulty: details.question.difficulty || 'Medium',
+        topicTags: (details.question.topicTags || []).map((t: any) => ({
+          name: t.name ?? '',
+          slug: t.slug ?? t.name?.toLowerCase().replace(/\s+/g, '-') ?? '',
+        })),
+        paidOnly: details.question.isPaidOnly ?? false,
+        categoryTitle: details.question.categoryTitle ?? '',
+        likes: details.question.likes ?? 0,
+        dislikes: details.question.dislikes ?? 0,
+      } : undefined,
       language: details.lang?.name ?? details.lang ?? '',
       code: details.code ?? '',
       status: details.statusDisplay ?? '',

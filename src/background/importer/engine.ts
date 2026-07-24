@@ -167,7 +167,7 @@ export class ImportEngine {
           item.difficulty = detail.difficulty;
           item.state = ImportState.DOWNLOADED;
 
-          const baseDirectory = getProblemDirectory(detail, settings.folderStructure || 'Topic/Difficulty', detail.language);
+          const baseDirectory = getProblemDirectory(detail, settings.folderStructure || 'Topic/Difficulty', settings.topicMappings, detail.language);
           const solutionPath = buildLanguageScopedPath(baseDirectory, detail.language, DEFAULT_SOLUTION_LABEL);
           const manifestPath = buildManifestPath(baseDirectory);
           const readmePath = buildReadmePath(baseDirectory);

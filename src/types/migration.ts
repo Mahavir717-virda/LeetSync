@@ -1,3 +1,4 @@
+import type { TopicTag } from './submission';
 /**
  * Types for Repository Migration System
  */
@@ -61,7 +62,7 @@ export interface ProblemMetadata {
   title: string;
   questionNumber: number;
   difficulty: 'Easy' | 'Medium' | 'Hard';
-  topicTags: string[];
+  topicTags: TopicTag[];
   fetched: boolean;
   source: 'cache' | 'leetcode' | 'repository' | 'unknown';
   error?: string;
@@ -204,6 +205,8 @@ export interface PreflightResult {
 
 export interface LeetSyncConfig {
   layoutVersion: number;
+  organizationStrategyVersion: number;
+  folderStrategy: 'PRIMARY_TOPIC' | 'CUSTOM_MAPPING' | 'DIFFICULTY_ONLY' | 'FLAT' | 'CONTEST';
   features: {
     topicLayout: boolean;
     migration: boolean;

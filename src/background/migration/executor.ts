@@ -116,6 +116,8 @@ export async function executeMigration(
     // Write leetsync.json to repo root
     const config: LeetSyncConfig = {
       layoutVersion: 2,
+      organizationStrategyVersion: 1,
+      folderStrategy: 'PRIMARY_TOPIC',
       features: {
         topicLayout: true,
         migration: true,

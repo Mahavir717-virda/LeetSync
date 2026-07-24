@@ -25,37 +25,82 @@ export async function executeRollback(
 
   // Build reverse tree mutations
   const treeMutations: TreeMutation[] = [];
-  for (const move of rollbackPlan.moves) {
-    if (move.rolledBack) continue;
+  
+  // To avoid 'invalid blob' errors from GitHub, we must re-upload/create blobs
+  // for any files we are restoring, rather than assuming their old tree SHAs
+  // are still valid or reachable in the remote repository ref tree.
+  const activeMoves = rollbackPlan.moves.filter(m => !m.rolledBack);
+
+  // Group files to restore
+  const filesToRestore: { path: string; sourcePath: string; sourceSha: string }[] = [];
+  const pathsToDelete: string[] = [];
+
+  for (const move of activeMoves) {
     for (const file of move.files) {
-      // Add to original path
-      treeMutations.push({
+      filesToRestore.push({
         path: file.originalPath,
-        mode: '100644',
-        type: 'blob',
-        sha: file.currentSha,
+        sourcePath: file.currentPath,
+        sourceSha: file.currentSha,
       });
-      // Delete from current path
-      treeMutations.push({
-        path: file.currentPath,
-        mode: '100644',
-        type: 'blob',
-        sha: null,
-      });
+      pathsToDelete.push(file.currentPath);
     }
   }
 
-  if (treeMutations.length === 0) {
+  if (filesToRestore.length === 0 && pathsToDelete.length === 0) {
     return { success: true, rolled: 0, failed: 0 };
   }
 
+  // Fetch actual file contents from current locations and create blobs
+  logger.log('info', 'rollback', `Resolving content and creating new blobs for ${filesToRestore.length} files...`);
+  
+  const resolvedMutations: TreeMutation[] = [];
+
+  for (const file of filesToRestore) {
+    try {
+      const fileData = await githubApi.getFileContent(token, owner, repo, file.sourcePath);
+      if (fileData?.content) {
+        // Upload blob to generate a valid new SHA on remote
+        const response = await (githubApi as any).request(`/repos/${owner}/${repo}/git/blobs`, token, {
+          method: 'POST',
+          body: JSON.stringify({
+            content: fileData.content, // already base64 encoded from API response
+            encoding: 'base64',
+          }),
+        });
+
+        resolvedMutations.push({
+          path: file.path,
+          mode: '100644',
+          type: 'blob',
+          sha: response.sha,
+        });
+      }
+    } catch (err: any) {
+      logger.log('warn', 'rollback', `Failed to read or create blob for ${file.sourcePath}: ${err.message}`);
+    }
+  }
+
+  // Add deletions
+  for (const path of pathsToDelete) {
+    resolvedMutations.push({
+      path,
+      mode: '100644',
+      type: 'blob',
+      sha: null,
+    });
+  }
+
+  if (resolvedMutations.length === 0) {
+    return { success: false, rolled: 0, failed: 0 };
+  }
+
   // Split into batches if needed
-  const batchesCount = Math.ceil(treeMutations.length / COMMIT_BATCH_SIZE);
+  const batchesCount = Math.ceil(resolvedMutations.length / COMMIT_BATCH_SIZE);
   let rolled = 0;
   let failed = 0;
 
   for (let b = 0; b < batchesCount; b++) {
-    const batchEntries = treeMutations.slice(b * COMMIT_BATCH_SIZE, (b + 1) * COMMIT_BATCH_SIZE);
+    const batchEntries = resolvedMutations.slice(b * COMMIT_BATCH_SIZE, (b + 1) * COMMIT_BATCH_SIZE);
     try {
       const ref = await githubApi.getRef(token, owner, repo, branch);
       const headSha = ref.object.sha;
@@ -71,7 +116,7 @@ export async function executeRollback(
     }
 
     if (onProgress) {
-      onProgress(rolled, treeMutations.length / 2);
+      onProgress(rolled, resolvedMutations.length / 2);
     }
   }
 

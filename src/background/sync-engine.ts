@@ -23,10 +23,13 @@ import {
   getDefaultSolution,
   isLegacyManifest,
   migrateLegacyManifest,
+  normalizeManifest,
 } from '@/generators/manifest';
 import { resolveUniqueLabel } from './label-resolver';
 import { addToQueue, acquireLock, releaseLock } from './queue';
 import { fetchLeetCodeMetadata } from './migration/metadata-fetcher';
+import { topicIndex } from '@/utils/topic-index';
+import type { TopicTag } from '@/types';
 
 // ─── Conflict Resolution Helpers ──────────────────────────────────────────────
 
@@ -137,12 +140,12 @@ export async function syncSubmission(
     console.log(`[LeetSync Sync] 🚀 Starting sync for: "${submission.title}" (${submission.language})`);
 
     // Enrich missing topic tags or difficulty from LeetCode GraphQL before constructing baseDirectory
-    if ((!submission.tags || submission.tags.length === 0 || !submission.difficulty) && submission.titleSlug) {
+    if ((!submission.topicTags || submission.topicTags.length === 0 || !submission.difficulty) && submission.titleSlug) {
       try {
         const meta = await fetchLeetCodeMetadata(submission.titleSlug);
         if (meta) {
           if (Array.isArray(meta.topicTags) && meta.topicTags.length > 0) {
-            submission.tags = meta.topicTags;
+            submission.topicTags = meta.topicTags;
           }
           if (meta.difficulty) {
             submission.difficulty = meta.difficulty;
@@ -156,7 +159,7 @@ export async function syncSubmission(
       }
     }
 
-    const baseDirectory = getProblemDirectory(submission, folderStructure, submission.language);
+    const baseDirectory = getProblemDirectory(submission, folderStructure, settings.topicMappings, submission.language);
 
     // ─── Step 1: Fetch or create manifest ──────────────────────
     const manifestPath = buildManifestPath(baseDirectory);
@@ -171,13 +174,8 @@ export async function syncSubmission(
       const parsed = JSON.parse(decoded);
       manifestSha = existingManifestFile.sha;
 
-      // Auto-upgrade legacy schemaVersion=1 manifests
-      if (isLegacyManifest(parsed)) {
-        console.log('[LeetSync Sync] [Step 1/5] Legacy manifest detected — upgrading to schemaVersion=2.');
-        manifest = migrateLegacyManifest(parsed);
-      } else {
-        manifest = parsed as ProblemManifest;
-      }
+      // Auto-upgrade legacy schemaVersion=1 manifests or normalise schemaVersion=2
+      manifest = normalizeManifest(parsed);
     } else {
       console.log('[LeetSync Sync] [Step 1/5] No manifest found — creating new.');
       manifest = createManifest(submission);
@@ -256,6 +254,7 @@ export async function syncSubmission(
       manifestSha
     );
     console.log('[LeetSync Sync] [Step 4/5] Manifest updated.');
+    topicIndex.add(updatedManifest);
 
     // ─── Step 5: Update per-problem README ─────────────────────
     const readmePath = buildReadmePath(baseDirectory);

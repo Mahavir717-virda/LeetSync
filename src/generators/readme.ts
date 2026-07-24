@@ -25,7 +25,7 @@ import { difficultyBadge, formatDateForDisplay, getLanguageName } from '@/utils/
  */
 export function generateProblemReadme(manifest: ProblemManifest): string {
   const badge = difficultyBadge(manifest.difficulty);
-  const tagsStr = manifest.tags.map((t) => `\`${t}\``).join(' ');
+  const tagsStr = (manifest.topicTags ?? manifest.tags ?? []).map((t) => typeof t === 'string' ? `\`${t}\`` : `\`${t.name}\``).join(' ');
 
   let md = `# ${badge} ${manifest.title}\n\n`;
   md += `**Difficulty:** ${manifest.difficulty}  \n`;

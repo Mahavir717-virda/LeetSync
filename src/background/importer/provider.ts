@@ -254,6 +254,10 @@ export class LeetCodeSubmissionProvider implements SubmissionProvider {
         titleSlug: details.question?.titleSlug || titleSlug,
         difficulty: (details.question?.difficulty as any) || 'Medium',
         tags: (details.question?.topicTags || []).map((t: any) => t.name) || [],
+        topicTags: (details.question?.topicTags || []).map((t: any) => ({
+          name: t.name ?? '',
+          slug: t.slug ?? t.name?.toLowerCase().replace(/\s+/g, '-') ?? '',
+        })) || [],
         language: details.lang?.name || 'cpp',
         code: details.code,
         runtime: details.runtime || 'N/A',

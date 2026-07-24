@@ -64,8 +64,8 @@ export function buildMigrationPlan(
   for (let i = 0; i < problems.length; i++) {
     const problem = problems[i];
     const metadata = metadataMap.get(problem.slug) || null;
-
-    const topic = getPrimaryTopic(metadata?.topicTags || []);
+    const topicTags = metadata?.topicTags || [];
+    const topic = getPrimaryTopic(topicTags.map(t => t.name));
     const difficulty = metadata?.difficulty || 'Easy';
     const paddedNum = String(problem.questionNumber).padStart(4, '0');
     const folderName = `${paddedNum}-${problem.slug}`;
