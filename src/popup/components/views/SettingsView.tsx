@@ -162,21 +162,32 @@ export function SettingsView({
             </select>
           </div>
 
-          <div class="ls-card flex items-center justify-between">
-            <div>
-              <p class="text-xs font-medium text-text-primary">Folder Structure</p>
-              <p class="text-[11px] text-text-muted">How solutions are grouped in GitHub</p>
+          <div class="ls-card flex flex-col gap-2.5">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-xs font-medium text-text-primary">Folder Structure</p>
+                <p class="text-[11px] text-text-muted">How solutions are grouped in GitHub</p>
+              </div>
+              <select
+                value={folderStructure}
+                onChange={(e) => handleSaveFolderStructure((e.target as HTMLSelectElement).value as FolderStructure)}
+                class="bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-xs text-text-primary focus:outline-none"
+              >
+                <option value="Topic/Difficulty">Topic / Difficulty</option>
+                <option value="Topic">Topic</option>
+                <option value="Difficulty">Difficulty</option>
+                <option value="Flat">Flat</option>
+              </select>
             </div>
-            <select
-              value={folderStructure}
-              onChange={(e) => handleSaveFolderStructure((e.target as HTMLSelectElement).value as FolderStructure)}
-              class="bg-bg-tertiary border border-border rounded-lg px-2 py-1 text-xs text-text-primary focus:outline-none"
-            >
-              <option value="Topic/Difficulty">Topic / Difficulty</option>
-              <option value="Topic">Topic</option>
-              <option value="Difficulty">Difficulty</option>
-              <option value="Flat">Flat</option>
-            </select>
+            <div class="border-t border-border/60 pt-2 flex items-center justify-between">
+              <span class="text-[11px] text-text-muted">Existing repository files in old layout?</span>
+              <button
+                onClick={() => onNavigate('migration')}
+                class="text-xs text-accent-blue bg-accent-blue/10 border border-accent-blue/30 px-2.5 py-1 rounded-lg hover:bg-accent-blue/20 transition-colors btn-press flex items-center gap-1 font-medium shrink-0"
+              >
+                ⚡ Migrate Repository
+              </button>
+            </div>
           </div>
 
           <div class="ls-card flex items-center justify-between">

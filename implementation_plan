@@ -1,0 +1,1065 @@
+# Repository Migration System — Final Plan (10/10) v3
+
+> [!IMPORTANT]
+> **Target structure:** `Topic/Difficulty/Problem/solution.ext`
+> ```
+> Array/Easy/0001-two-sum/solution.cpp
+> String/Medium/0003-longest-substring/solution.py
+> ```
+
+> [!IMPORTANT]
+> **Two legacy layouts supported:**
+> ```
+> Layout A — "legacy-flat-folder"        Layout B — "legacy-flat-root" (LeetHub v2)
+> problems/                              0001-two-sum/
+>     0001-two-sum/                          solution.cpp
+>         solution.cpp                   0002-add-two-numbers/
+>     0002-add-two-numbers/                  solution.cpp
+>         solution.cpp                   README.md
+>                                        stats.json
+> ```
+
+> [!IMPORTANT]
+> **Metadata resolution priority:**
+> ```
+> 1. Metadata Cache     ← chrome.storage, 7-day TTL (fastest)
+> 2. LeetCode GraphQL   ← authoritative source
+> 3. Repository metadata ← leetsync.json / manifest.json if present
+> 4. Uncategorized/      ← last resort
+> ```
+
+> [!IMPORTANT]
+> **Execution strategy: Git Data API (atomic batch commits)**
+> ```
+> OLD (per-file, thousands of API calls):
+>   GET blob → PUT file → DELETE file → repeat × 1000
+>
+> NEW (batch, ~5 API calls per batch of 500):
+>   Create blobs → Build tree → Create commit → Update ref
+>   One atomic commit. No partial states. 10x fewer API calls.
+> ```
+
+---
+
+## Phase 0 — Repository Validation & Pre-flight Checks
+
+**Goal:** Validate everything before migration starts. Block on hard failures, warn on soft issues.
+
+### [NEW] `src/background/migration/validator.ts`
+
+**Pre-flight checks:**
+
+| # | Check | Fail Behavior |
+|---|-------|--------------|
+| 1 | GitHub Connected | **BLOCK** |
+| 2 | Token Valid (`getUser`) | **BLOCK** |
+| 3 | Repo Exists (`getRepo`) | **BLOCK** |
+| 4 | Branch Exists (`default_branch`) | **BLOCK** |
+| 5 | Write Permission (`repo.permissions.push`) | **BLOCK** |
+| 6 | API Budget (`remaining >= estimated * 1.2`) | **WARN** + show wait time |
+| 7 | LeetCode Reachable (test GraphQL) | **WARN** (will use cache/fallback) |
+| 8 | Repo Type (no `package.json`, `Cargo.toml`, etc.) | **WARN** |
+| 9 | Storage Space (`chrome.storage.local` quota) | **WARN** |
+| 10 | **Migration Lock** — no other migration in progress | **BLOCK** |
+
+**Migration lock (prevents concurrent execution):**
+```ts
+interface MigrationLock {
+  active: boolean;
+  lockedAt: string;       // ISO timestamp
+  lockedBy: string;       // random session ID
+  expiresAt: string;      // auto-expire after 30 minutes of inactivity
+}
+
+async function acquireLock(): Promise<boolean>
+async function releaseLock(): Promise<void>
+async function isLocked(): Promise<boolean>
+```
+
+Lock is stored in `chrome.storage.local`. If two popup windows are open, only one can acquire the lock. Lock auto-expires after 30 minutes to handle crashes.
+
+Every executor heartbeat (after each move) refreshes the lock's `expiresAt`.
+
+### [MODIFY] `src/types/github.ts`
+- Add `permissions?: { admin: boolean; push: boolean; pull: boolean }` to `GitHubRepo`
+
+---
+
+## Phase 1 — Types & Configuration
+
+**Goal:** Define all data structures, extend settings/storage.
+
+### [NEW] `src/types/migration.ts`
+
+```ts
+// ─── Layout Detection ──────────────────────────────────────
+
+export type RepoLayout =
+  | 'legacy-flat-folder'    // problems/0001-two-sum/
+  | 'legacy-flat-root'      // 0001-two-sum/ at repo root (LeetHub v2)
+  | 'topic-difficulty'      // Array/Easy/0001-two-sum/
+  | 'unknown'
+  | 'empty';
+
+export type MigrationChoice = 'keep-legacy' | 'migrate-now' | 'new-only';
+
+// ─── Migration State ───────────────────────────────────────
+
+export type MigrationStatus =
+  | 'idle'
+  | 'validating'
+  | 'scanning'
+  | 'fetching-metadata'
+  | 'planning'
+  | 'previewing'
+  | 'executing'
+  | 'paused'
+  | 'rolling-back'
+  | 'completed'
+  | 'failed';
+
+export type MoveStatus =
+  | 'pending'
+  | 'staged'          // included in current batch tree
+  | 'completed'
+  | 'skipped'
+  | 'failed';
+
+export type ConflictResolution = 'skip' | 'overwrite' | 'rename';
+
+// ─── Scanned Data ──────────────────────────────────────────
+
+export interface ScannedProblem {
+  originalPath: string;
+  questionNumber: number;
+  slug: string;
+  files: ScannedFile[];
+  parseable: boolean;
+}
+
+export interface ScannedFile {
+  path: string;
+  sha: string;           // original blob SHA — used for content + verification
+  name: string;
+  size: number;
+}
+
+// ─── Metadata ──────────────────────────────────────────────
+
+export interface ProblemMetadata {
+  slug: string;
+  title: string;
+  questionNumber: number;
+  difficulty: 'Easy' | 'Medium' | 'Hard';
+  topicTags: string[];
+  fetched: boolean;
+  source: 'cache' | 'leetcode' | 'repository' | 'unknown';
+  error?: string;
+  cachedAt?: string;
+}
+
+// ─── Migration Move ───────────────────────────────────────
+
+export interface MigrationMove {
+  id: string;
+  problem: ScannedProblem;
+  metadata: ProblemMetadata | null;
+  sourcePath: string;
+  targetPath: string;
+  files: MoveFile[];
+  status: MoveStatus;
+  conflict: boolean;
+  conflictResolution?: ConflictResolution;
+  duplicate: boolean;
+  error?: string;
+  batchIndex?: number;        // which commit batch this move belongs to
+}
+
+export interface MoveFile {
+  sourcePath: string;
+  targetPath: string;
+  sourceSha: string;          // blob SHA from tree scan
+  expectedSha?: string;       // computed SHA for verification
+  verified: boolean;          // true after SHA verification passes
+}
+
+// ─── Batch Commit ─────────────────────────────────────────
+
+export interface CommitBatch {
+  index: number;
+  moveIds: string[];           // moves included in this batch
+  treeEntries: TreeMutation[];
+  status: 'pending' | 'committed' | 'failed';
+  commitSha?: string;
+  error?: string;
+}
+
+export interface TreeMutation {
+  path: string;
+  mode: '100644';              // regular file
+  type: 'blob';
+  sha: string | null;          // blob SHA for add/move, null for delete
+}
+
+// ─── Dry-Run Estimate ─────────────────────────────────────
+
+export interface MigrationEstimate {
+  totalProblems: number;
+  totalFiles: number;
+  foldersToCreate: number;
+  foldersToDelete: number;
+  commitBatches: number;       // number of batch commits needed
+  githubApiCalls: number;      // much lower with Git Data API
+  estimatedTimeSeconds: number;
+  rateLimitRemaining: number;
+  rateLimitResetsAt: string;
+  enoughBudget: boolean;
+}
+
+// ─── Migration Plan ───────────────────────────────────────
+
+export interface MigrationPlan {
+  version: number;
+  status: MigrationStatus;
+  detectedLayout: RepoLayout;
+  repoOwner: string;
+  repoName: string;
+  defaultBranch: string;
+  totalProblems: number;
+  completedCount: number;
+  failedCount: number;
+  skippedCount: number;
+  moves: MigrationMove[];
+  batches: CommitBatch[];      // grouped commit batches
+  manualReview: ScannedProblem[];
+  estimate: MigrationEstimate | null;
+  startedAt: string | null;
+  lastUpdatedAt: string | null;
+  currentBatchIndex: number;   // for resume
+  aborted: boolean;
+}
+
+// ─── Rollback ─────────────────────────────────────────────
+
+export interface RollbackPlan {
+  available: boolean;
+  moves: RollbackMove[];
+  executedAt: string | null;
+}
+
+export interface RollbackMove {
+  moveId: string;
+  files: {
+    currentPath: string;
+    originalPath: string;
+    currentSha: string;
+  }[];
+  rolledBack: boolean;
+}
+
+// ─── Telemetry ────────────────────────────────────────────
+
+export interface MigrationLogEntry {
+  timestamp: string;
+  level: 'info' | 'warn' | 'error' | 'debug';
+  phase: string;
+  message: string;
+  data?: Record<string, unknown>;
+}
+
+// ─── Migration Lock ───────────────────────────────────────
+
+export interface MigrationLock {
+  active: boolean;
+  lockedAt: string;
+  lockedBy: string;        // random session UUID
+  expiresAt: string;       // auto-expire after 30 min inactivity
+}
+
+// ─── leetsync.json (stored in repo root) ──────────────────
+
+export interface LeetSyncConfig {
+  layoutVersion: number;
+  features: {
+    topicLayout: boolean;
+    migration: boolean;
+  };
+  migratedAt?: string;
+  migratedFrom?: string;
+  problemCount?: number;
+}
+
+// ─── Protected Files ──────────────────────────────────────
+
+export const PROTECTED_ROOT_FILES = [
+  'README.md', 'readme.md',
+  'stats.json',
+  'LICENSE', 'LICENSE.md',
+  '.gitignore', '.gitattributes',
+  'leetsync.json',
+  'CONTRIBUTING.md',
+];
+```
+
+### [MODIFY] `src/types/settings.ts`
+- Add `layoutVersion: number` (default `1`)
+- Add `migrationChoice: MigrationChoice | null` (default `null`)
+- Revert `FolderStructure` — remove `'Topic/Language/Difficulty'`, keep `'Topic/Difficulty'`
+- Default `folderStructure` back to `'Topic/Difficulty'`
+
+### [MODIFY] `src/types/index.ts`
+- Re-export all types from `migration.ts`
+
+### [MODIFY] `src/utils/constants.ts`
+```ts
+// New storage keys
+StorageKey.MIGRATION_PLAN = 'leetsync_migration_plan'
+StorageKey.ROLLBACK_PLAN = 'leetsync_rollback_plan'
+StorageKey.MIGRATION_LOG = 'leetsync_migration_log'
+StorageKey.METADATA_CACHE = 'leetsync_metadata_cache'
+StorageKey.MIGRATION_LOCK = 'leetsync_migration_lock'
+
+// Layout detection
+export const KNOWN_TOPIC_FOLDERS = [
+  'Array', 'String', 'Hash-Table', 'Linked-List', 'Tree', 'Graph',
+  'Heap', 'Stack', 'Queue', 'Binary-Search', 'Dynamic-Programming',
+  'Greedy', 'Backtracking', 'Trie', 'Math', 'Bit-Manipulation',
+  'Geometry', 'Database', 'Shell', 'Concurrency', 'Uncategorized'
+];
+
+export const NON_LEETCODE_INDICATORS = [
+  'package.json', 'Cargo.toml', 'go.mod', 'pom.xml',
+  'build.gradle', 'Makefile', 'docker-compose.yml',
+  'tsconfig.json', 'webpack.config.js', 'vite.config.ts'
+];
+
+export const PROBLEM_FOLDER_REGEX = /^(\d{4})-(.+)$/;
+export const MAX_METADATA_CACHE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+export const MIGRATION_LOCK_TTL_MS = 30 * 60 * 1000;    // 30 min auto-expire
+export const COMMIT_BATCH_SIZE = 500;                     // files per commit
+```
+
+### [MODIFY] `src/utils/storage.ts`
+- Add `getMigrationPlan()` / `saveMigrationPlan()` / `clearMigrationPlan()`
+- Add `getRollbackPlan()` / `saveRollbackPlan()` / `clearRollbackPlan()`
+- Add `getMigrationLog()` / `appendMigrationLog()` / `clearMigrationLog()`
+- Add `getMetadataCache()` / `setMetadataCache(slug, metadata)` / `getCachedMetadata(slug)`
+- Add `getMigrationLock()` / `setMigrationLock()` / `clearMigrationLock()`
+- Add `updateMoveStatus(moveId, status, error?)`
+
+---
+
+## Phase 2 — GitHub API Extensions (Git Data API)
+
+**Goal:** Add Git Data API methods for atomic batch commits + scanning APIs + retry/rate-limit handling.
+
+### [MODIFY] `src/background/github-api.ts`
+
+**Existing scanning methods:**
+
+| Method | API Call | Purpose |
+|--------|----------|---------|
+| `listDirectory(token, owner, repo, path)` | `GET /repos/:o/:r/contents/:path` | List folder |
+| `getTree(token, owner, repo, sha, recursive?)` | `GET /repos/:o/:r/git/trees/:sha?recursive=1` | Full repo tree |
+| `getBlob(token, owner, repo, sha)` | `GET /repos/:o/:r/git/blobs/:sha` | File by SHA |
+| `getRateLimitInfo(token)` | `GET /rate_limit` | Rate limit status |
+
+**New Git Data API methods (for atomic batch commits):**
+
+| Method | API Call | Purpose |
+|--------|----------|---------|
+| `getRef(token, owner, repo, ref)` | `GET /repos/:o/:r/git/ref/heads/:branch` | Get branch HEAD SHA |
+| `getCommit(token, owner, repo, sha)` | `GET /repos/:o/:r/git/commits/:sha` | Get commit (to find tree SHA) |
+| `createTree(token, owner, repo, baseTree, mutations)` | `POST /repos/:o/:r/git/trees` | Create new tree with changes |
+| `createCommit(token, owner, repo, message, tree, parents)` | `POST /repos/:o/:r/git/commits` | Create commit pointing to tree |
+| `updateRef(token, owner, repo, ref, sha)` | `PATCH /repos/:o/:r/git/refs/heads/:branch` | Move branch to new commit |
+
+**How a batch migration commit works:**
+
+```
+Step 1: GET ref → get current HEAD commit SHA
+Step 2: GET commit → get current tree SHA
+Step 3: POST trees → create new tree with all mutations:
+        [
+          { path: "Array/Easy/0001-two-sum/solution.cpp",  sha: "abc123" },  // add
+          { path: "Array/Easy/0002-add-two/solution.cpp",   sha: "def456" },  // add
+          { path: "problems/0001-two-sum/solution.cpp",     sha: null },      // delete
+          { path: "problems/0002-add-two/solution.cpp",     sha: null },      // delete
+          ...500 more mutations
+        ]
+Step 4: POST commits → create commit with message "LeetSync Migration (batch 1/3)"
+Step 5: PATCH ref → update branch HEAD to new commit
+
+Total API calls for 500 file moves: 5
+Compare to Contents API: 500 × 3 = 1,500
+```
+
+**API call comparison for 1000 problems:**
+
+| Strategy | API Calls | Time (est.) |
+|----------|-----------|-------------|
+| Contents API (old) | ~4,000 | ~12 minutes |
+| Git Data API (new, 500/batch) | ~15 | ~5 seconds |
+
+**Retry with exponential backoff (built into `request()`):**
+```
+Retryable: 429, 500, 502, 503, 504
+Attempt 1 → fail → wait 1s
+Attempt 2 → fail → wait 4s
+Attempt 3 → fail → wait 16s → throw
+On 429: use Retry-After header if present
+```
+
+**Rate-limit auto-pause (built into `request()`):**
+```
+Before each call:
+  if remaining <= 5:
+    wait until reset + 1s buffer
+```
+
+### [MODIFY] `src/types/github.ts`
+Add types:
+```ts
+interface GitHubTreeResponse {
+  sha: string;
+  tree: GitHubTreeEntry[];
+  truncated: boolean;
+}
+interface GitHubTreeEntry {
+  path: string;
+  mode: string;
+  type: 'blob' | 'tree';
+  sha: string;
+  size?: number;
+}
+interface GitHubBlobResponse {
+  sha: string;
+  content: string;
+  encoding: 'base64' | 'utf-8';
+  size: number;
+}
+interface GitHubRefResponse {
+  ref: string;
+  object: { sha: string; type: string };
+}
+interface GitHubCommitResponse {
+  sha: string;
+  tree: { sha: string };
+  message: string;
+  parents: { sha: string }[];
+}
+```
+
+---
+
+## Phase 3 — Repository Layout Detector
+
+**Goal:** Detect which of 3 layouts the repo uses.
+
+### [NEW] `src/background/migration/detect-layout.ts`
+
+```ts
+detectRepoLayout(token, owner, repo)
+  → Promise<{ layout: RepoLayout; tree: GitHubTreeEntry[]; defaultBranch: string }>
+```
+
+**Detection algorithm:**
+```
+Step 1: Fetch repo info → get defaultBranch
+Step 2: getTree('HEAD', recursive=true) → full tree
+Step 3: Check for leetsync.json
+    → layoutVersion >= 2 → 'topic-difficulty'
+Step 4: Check for problems/ directory
+    → contains ^\d{4}-.+ folders → 'legacy-flat-folder'
+Step 5: Check root for ^\d{4}-.+ folders
+    → count >= 3 → 'legacy-flat-root'
+Step 6: Check for known topic folders with difficulty subs
+    → 'topic-difficulty'
+Step 7: Empty → 'empty'
+Step 8: → 'unknown'
+```
+
+Returns tree + defaultBranch for reuse by scanner and executor.
+
+---
+
+## Phase 4 — Problem Scanner & Metadata Fetcher
+
+**Goal:** Scan problems from either layout, resolve metadata through a priority chain with caching.
+
+### [NEW] `src/background/migration/scanner.ts`
+
+**Layout-aware scanning:**
+
+| Layout | Scan target | Source path |
+|--------|-------------|-------------|
+| `legacy-flat-folder` | Under `problems/` | `problems/0001-two-sum` |
+| `legacy-flat-root` | Root-level `^\d{4}-.+` | `0001-two-sum` |
+
+**Algorithm:**
+1. Filter tree entries by layout
+2. Parse folder names: `PROBLEM_FOLDER_REGEX`
+3. Collect child files per folder
+4. Skip `PROTECTED_ROOT_FILES` when layout is `legacy-flat-root`
+5. Detect duplicates (same problem in legacy + topic folders)
+
+### [NEW] `src/background/migration/metadata-fetcher.ts`
+
+**Metadata resolver chain:**
+
+```ts
+async function resolveMetadata(slug: string): Promise<ProblemMetadata> {
+  // 1. Check cache (fastest)
+  const cached = await getCachedMetadata(slug);
+  if (cached && !isExpired(cached)) {
+    return { ...cached, source: 'cache' };
+  }
+
+  // 2. Fetch from LeetCode GraphQL (authoritative)
+  try {
+    const leetcode = await fetchFromLeetCode(slug);
+    await setMetadataCache(slug, leetcode);
+    return { ...leetcode, source: 'leetcode' };
+  } catch (e) {
+    // LeetCode failed — continue to fallback
+  }
+
+  // 3. Check repository metadata (leetsync.json, manifest.json)
+  const repoMeta = await findRepoMetadata(slug, tree);
+  if (repoMeta) {
+    return { ...repoMeta, source: 'repository' };
+  }
+
+  // 4. Last resort
+  return {
+    slug,
+    title: slug,
+    questionNumber: 0,
+    difficulty: 'Easy' as const,  // will go to Uncategorized
+    topicTags: [],
+    fetched: false,
+    source: 'unknown',
+    error: 'All metadata sources failed',
+  };
+}
+```
+
+**Repository metadata fallback (`source: 'repository'`):**
+If the repo contains `manifest.json` files (from earlier LeetSync runs) or a `leetsync.json` with embedded metadata, parse them. This handles:
+- LeetCode API is down
+- Slug has been renamed on LeetCode
+- Problem is a premium-only problem with restricted API access
+
+**Batch fetching with cache:**
+```
+1500 slugs
+    ↓
+1200 cached (fresh) → source: 'cache'
+    ↓
+300 need LeetCode fetch
+    ↓
+295 succeed → source: 'leetcode', cached immediately
+    ↓
+5 fail → check repo metadata
+    ↓
+3 found in manifest.json → source: 'repository'
+    ↓
+2 unknown → Uncategorized/Unknown/
+```
+
+**Rate limiting & cancellation:** Same as v2 (2 req/s, backoff, AbortSignal).
+
+---
+
+## Phase 5 — Migration Planner, Dry-Run & Preview
+
+**Goal:** Build migration plan, compute batches, estimate costs.
+
+### [NEW] `src/background/migration/planner.ts`
+
+```ts
+buildMigrationPlan(...) → MigrationPlan
+```
+
+**Algorithm:**
+1. For each problem → compute target path using `getPrimaryTopic()` + sanitized folders
+2. Detect conflicts + duplicates
+3. **Group moves into commit batches** of `COMMIT_BATCH_SIZE` (500 files):
+   ```ts
+   // Example: 1000 problems with 1 file each = 2 batches
+   // Batch 1: moves 0-499 (1000 tree mutations: 500 adds + 500 deletes)
+   // Batch 2: moves 500-999 (1000 tree mutations: 500 adds + 500 deletes)
+   ```
+4. Build `CommitBatch[]` with tree mutations pre-computed
+5. Compute estimate
+
+**Dry-run estimate (Git Data API aware):**
+
+| Metric | Old (Contents API) | New (Git Data API) |
+|--------|-------------------|-------------------|
+| 1000 problems, 1 file each | ~4,000 calls | ~15 calls |
+| 1000 problems, 2 files each | ~8,000 calls | ~25 calls |
+| Est. time (1000 problems) | ~12 min | ~10 sec |
+
+```ts
+computeEstimate(plan): MigrationEstimate {
+  const totalFiles = plan.moves.reduce((sum, m) => sum + m.files.length, 0);
+  const totalMutations = totalFiles * 2;  // add + delete per file
+  const batches = Math.ceil(totalMutations / COMMIT_BATCH_SIZE);
+  const apiCallsPerBatch = 5;  // getRef + getCommit + createTree + createCommit + updateRef
+  const totalApiCalls = batches * apiCallsPerBatch + 2; // +2 for leetsync.json + final verify
+  const estimatedSeconds = totalApiCalls * 1.5; // ~1.5s per API call with overhead
+  // ...
+}
+```
+
+**Preview shows batches:**
+```
+📋 Migration Preview
+
+985 problems · 1,247 files
+10 conflicts · 5 duplicates · 2 manual review
+
+Commit batches: 3 (atomic — each batch is one commit)
+API calls: ~17  (vs ~5,000 with old approach)
+Est. time: ~25 seconds
+Budget: ✅ 4,850 remaining
+
+Protected (untouched): README.md, stats.json, LICENSE
+```
+
+### [MODIFY] `src/utils/folder-strategy.ts`
+- Revert `Topic/Language/Difficulty` case
+- Export `getPrimaryTopic()`
+- Centralize `sanitizeFolderName()`
+
+### [MODIFY] `src/utils/filename.ts`
+- Revert `buildFlatSolutionFilename`
+- Revert `flat` parameter from `buildSubmissionPath`
+
+---
+
+## Phase 5.5 — Migration Safety Layer
+
+**Goal:** Batch commit execution, SHA verification, cancellation, duplicate resolution.
+
+### [NEW] `src/background/migration/safety.ts`
+
+**1. Batch commit executor:**
+
+```ts
+executeCommitBatch(
+  batch: CommitBatch,
+  token, owner, repo, branch,
+  logger: MigrationLogger
+) → Promise<{ success: boolean; commitSha?: string; error?: string }>
+```
+
+**Atomic batch flow:**
+```
+Step 1: getRef('heads/${branch}') → headSha
+Step 2: getCommit(headSha) → currentTreeSha
+Step 3: createTree(currentTreeSha, batch.treeEntries)
+    Tree entries for 500 file moves:
+    [
+      // Adds (move files to new location — reuse existing blob SHAs)
+      { path: "Array/Easy/0001-two-sum/solution.cpp", mode: "100644", type: "blob", sha: "abc123" },
+      { path: "Array/Easy/0002-add-two/solution.java", mode: "100644", type: "blob", sha: "def456" },
+      ...
+      // Deletes (remove files from old location)
+      { path: "problems/0001-two-sum/solution.cpp", mode: "100644", type: "blob", sha: null },
+      { path: "problems/0002-add-two/solution.java", mode: "100644", type: "blob", sha: null },
+    ]
+    → newTreeSha
+
+Step 4: createCommit("LeetSync Migration (batch 1/3)", newTreeSha, [headSha])
+    → newCommitSha
+
+Step 5: updateRef('heads/${branch}', newCommitSha)
+    → branch now points to new commit
+```
+
+**Key insight:** We don't need to GET blob content at all. The tree scan already gave us the blob SHAs. We reuse them directly in the new tree — Git just updates where the SHA points to. This is why it's so fast.
+
+**2. SHA verification (addresses edge case C):**
+
+After each batch commit:
+```ts
+async function verifyBatch(batch, token, owner, repo): Promise<boolean> {
+  // Fetch the new tree after commit
+  const newTree = await githubApi.getTree(token, owner, repo, batch.commitSha, true);
+
+  for (const move of batch.moves) {
+    for (const file of move.files) {
+      // Verify target exists with expected SHA
+      const targetEntry = newTree.tree.find(e => e.path === file.targetPath);
+      if (!targetEntry || targetEntry.sha !== file.sourceSha) {
+        logger.log('error', 'safety', `SHA mismatch for ${file.targetPath}`, {
+          expected: file.sourceSha,
+          actual: targetEntry?.sha ?? 'missing'
+        });
+        return false;
+      }
+      file.verified = true;
+
+      // Verify source is deleted
+      const sourceEntry = newTree.tree.find(e => e.path === file.sourcePath);
+      if (sourceEntry) {
+        logger.log('warn', 'safety', `Source not deleted: ${file.sourcePath}`);
+      }
+    }
+  }
+  return true;
+}
+```
+
+**3. Retry with exponential backoff:**
+```ts
+withRetry<T>(fn, { maxRetries: 3, baseDelay: 1000, signal? }) → Promise<T>
+// 1s → 4s → 16s → throw
+```
+
+**4. Rate-limit pause/resume:**
+Before each batch:
+```ts
+const batchCost = 5; // API calls per batch
+if (rateLimit.remaining < batchCost + 10) {
+  plan.status = 'paused';
+  await sleepUntil(rateLimit.reset + 2000);
+  plan.status = 'executing';
+}
+```
+
+**5. AbortController:**
+```ts
+class MigrationController {
+  private controller = new AbortController();
+  get signal() { return this.controller.signal; }
+
+  cancel() {
+    this.controller.abort();
+    // Current batch completes (atomic — don't abort mid-commit)
+    // Save progress, status → 'paused'
+  }
+}
+```
+
+Checked between batches, NOT within a batch. Each batch is atomic.
+
+**6. Duplicate resolution:**
+Same as v2: `skip`, `overwrite`, or `merge`.
+
+---
+
+## Phase 6 — Migration Executor
+
+**Goal:** Execute batches sequentially with persistent progress.
+
+### [NEW] `src/background/migration/executor.ts`
+
+```ts
+executeMigration(
+  plan: MigrationPlan,
+  token, owner, repo,
+  controller: MigrationController,
+  onProgress: (plan: MigrationPlan) => void
+) → Promise<MigrationPlan>
+```
+
+**Execution loop:**
+```ts
+for (const batch of plan.batches) {
+  if (batch.status !== 'pending') continue;
+  if (controller.signal.aborted) break;
+
+  // Check rate limit budget
+  await ensureRateBudget(5); // 5 calls per batch
+
+  // Refresh migration lock heartbeat
+  await refreshLock();
+
+  logger.log('info', 'executor', `Executing batch ${batch.index + 1}/${plan.batches.length}`);
+
+  const result = await executeCommitBatch(batch, token, owner, repo, plan.defaultBranch, logger);
+
+  if (result.success) {
+    batch.status = 'committed';
+    batch.commitSha = result.commitSha;
+
+    // Verify batch
+    const verified = await verifyBatch(batch, token, owner, repo);
+    if (!verified) {
+      logger.log('warn', 'executor', `Batch ${batch.index + 1} verification had warnings`);
+    }
+
+    // Mark all moves in this batch as completed
+    for (const moveId of batch.moveIds) {
+      const move = plan.moves.find(m => m.id === moveId);
+      if (move) {
+        move.status = 'completed';
+        plan.completedCount++;
+        addToRollbackPlan(move);
+      }
+    }
+  } else {
+    batch.status = 'failed';
+    batch.error = result.error;
+    // Mark all moves in batch as failed
+    for (const moveId of batch.moveIds) {
+      const move = plan.moves.find(m => m.id === moveId);
+      if (move) {
+        move.status = 'failed';
+        move.error = result.error;
+        plan.failedCount++;
+      }
+    }
+  }
+
+  // Persist after EVERY batch
+  plan.currentBatchIndex = batch.index + 1;
+  plan.lastUpdatedAt = new Date().toISOString();
+  await saveMigrationPlan(plan);
+  onProgress(plan);
+}
+```
+
+**Progress persistence (addresses edge case D):**
+After each batch, the plan stores:
+```ts
+{
+  currentBatchIndex: 2,          // resume from batch 3
+  batches: [
+    { index: 0, status: 'committed', commitSha: 'abc...' },
+    { index: 1, status: 'committed', commitSha: 'def...' },
+    { index: 2, status: 'pending' },  // ← resume here
+  ]
+}
+```
+
+**Resume:** On startup, if plan status is `'executing'` or `'paused'`:
+- Skip batches with `status === 'committed'`
+- Start from `currentBatchIndex`
+- Show "Resume migration?" prompt
+
+**Protected files:** When building tree mutations:
+- Never include `PROTECTED_ROOT_FILES` in delete mutations
+- Only problem folders (`^\d{4}-.+`) get deleted
+
+**Finalization:**
+1. Write `leetsync.json` to repo root (via one final Contents API call):
+   ```json
+   {
+     "layoutVersion": 2,
+     "features": {
+       "topicLayout": true,
+       "migration": true
+     },
+     "migratedAt": "2026-07-21T15:00:00Z",
+     "migratedFrom": "legacy-flat-root",
+     "problemCount": 985
+   }
+   ```
+2. Update settings: `layoutVersion: 2`, `migrationChoice: 'migrate-now'`
+3. Plan status → `'completed'`
+4. **Ask user about stats regeneration (addresses edge case E):**
+   ```
+   ✅ Migration Complete!
+   
+   Would you like to regenerate README and statistics?
+   ○ Yes — generate new README with topic index
+   ○ Keep existing — leave README.md and stats.json as-is
+   ```
+
+---
+
+## Phase 6.5 — Rollback & Recovery
+
+**Goal:** Undo a migration using reverse batch commits.
+
+### [NEW] `src/background/migration/rollback.ts`
+
+```ts
+executeRollback(
+  rollbackPlan: RollbackPlan,
+  token, owner, repo, branch,
+  onProgress: (completed, total) => void
+) → Promise<{ success: boolean; rolled: number; failed: number }>
+```
+
+**Rollback uses the same Git Data API approach:**
+Build a reverse tree — moves files back from target to source — and create one atomic commit:
+```
+"LeetSync Rollback: restore legacy layout"
+```
+
+If the migration was 3 batches, rollback is 1-3 reverse batches.
+
+**After rollback:**
+- Delete or update `leetsync.json` → `{ "layoutVersion": 1 }`
+- Update settings: `layoutVersion: 1`, `migrationChoice: null`
+- Root files (README.md, stats.json) untouched
+
+**Version compatibility:**
+```
+V1 → V2 (current)
+V2 → V3 (future — chain migrations)
+Rollback: always one version back
+```
+
+---
+
+## Phase 7 — Telemetry & Debug Logging
+
+**Goal:** Structured logging for debugging.
+
+### [NEW] `src/background/migration/logger.ts`
+
+```ts
+class MigrationLogger {
+  log(level, phase, message, data?): void
+  async flush(): Promise<void>
+  async export(): Promise<string>
+}
+```
+
+**Sample log output:**
+```
+[INFO]  [detector]  Layout: legacy-flat-root (1,247 folders)
+[INFO]  [scanner]   Scanned 1,245 parseable, 2 unparseable
+[INFO]  [fetcher]   Resolver: 1000 cache, 242 leetcode, 3 repository, 2 unknown
+[INFO]  [planner]   Plan: 985 moves, 3 batches, ~17 API calls
+[INFO]  [executor]  Batch 1/3: 500 moves → committed (sha: abc123) ✓
+[INFO]  [executor]  Batch 1/3: SHA verification passed ✓
+[INFO]  [executor]  Batch 2/3: 485 moves → committed (sha: def456) ✓
+[INFO]  [executor]  Complete: 982 moved, 3 failed
+[INFO]  [executor]  Stats regeneration: user chose "keep existing"
+```
+
+---
+
+## Phase 8 — Popup UI & Message Handlers
+
+**Goal:** Full migration UI + background wiring.
+
+### [MODIFY] `src/utils/constants.ts`
+```ts
+DETECT_LAYOUT = 'DETECT_LAYOUT',
+RUN_PREFLIGHT = 'RUN_PREFLIGHT',
+GET_MIGRATION_PLAN = 'GET_MIGRATION_PLAN',
+START_MIGRATION_SCAN = 'START_MIGRATION_SCAN',
+SET_MIGRATION_CHOICE = 'SET_MIGRATION_CHOICE',
+CONFIRM_MIGRATION = 'CONFIRM_MIGRATION',
+CANCEL_MIGRATION = 'CANCEL_MIGRATION',
+RESUME_MIGRATION = 'RESUME_MIGRATION',
+RESOLVE_CONFLICT = 'RESOLVE_CONFLICT',
+START_ROLLBACK = 'START_ROLLBACK',
+GET_MIGRATION_PROGRESS = 'GET_MIGRATION_PROGRESS',
+EXPORT_MIGRATION_LOG = 'EXPORT_MIGRATION_LOG',
+REGENERATE_STATS = 'REGENERATE_STATS',
+```
+
+### [MODIFY] `src/background/index.ts`
+Add handlers for all new message types.
+
+### [NEW] `src/background/migration/index.ts`
+Barrel export + orchestrator.
+
+### [MODIFY] `src/popup/App.tsx`
+6 screens:
+
+1. **Detection** — Legacy layout detected, choose action
+2. **Pre-flight + Scan** — Validation checks, metadata resolution progress
+3. **Preview + Estimate** — Plan, batches, API calls, time, protected files
+4. **Execution** — Batch progress with speed + ETA
+5. **Completion** — Report + stats regeneration prompt + rollback option
+6. **Rollback** (optional) — Rollback confirmation + progress
+
+### [MODIFY] `src/popup/styles.css`
+Migration UI styles.
+
+### [MODIFY] `src/background/sync-engine.ts`
+- Layout-aware syncing based on `layoutVersion`
+- Revert `flat`/`isFlatStructure` logic
+
+---
+
+## Complete File Summary
+
+| Phase | File | Action | Purpose |
+|-------|------|--------|---------|
+| **0** | `src/background/migration/validator.ts` | **NEW** | 10-point pre-flight + migration lock |
+| **0** | `src/types/github.ts` | MODIFY | `permissions`, ref/commit/tree types |
+| **1** | `src/types/migration.ts` | **NEW** | All types + lock + config + protected files |
+| **1** | `src/types/settings.ts` | MODIFY | `layoutVersion`, `migrationChoice` |
+| **1** | `src/types/index.ts` | MODIFY | Re-exports |
+| **1** | `src/utils/constants.ts` | MODIFY | Keys, regexes, batch size, lock TTL |
+| **1** | `src/utils/storage.ts` | MODIFY | Plan/rollback/log/cache/lock CRUD |
+| **2** | `src/background/github-api.ts` | MODIFY | Git Data API + retry + rate-limit |
+| **3** | `src/background/migration/detect-layout.ts` | **NEW** | 3-format detection |
+| **4** | `src/background/migration/scanner.ts` | **NEW** | Layout-aware scan + duplicates |
+| **4** | `src/background/migration/metadata-fetcher.ts` | **NEW** | 4-source resolver chain + cache |
+| **5** | `src/background/migration/planner.ts` | **NEW** | Plan + batches + estimate |
+| **5** | `src/utils/folder-strategy.ts` | MODIFY | Revert, export `getPrimaryTopic` |
+| **5** | `src/utils/filename.ts` | MODIFY | Revert flat changes |
+| **5.5** | `src/background/migration/safety.ts` | **NEW** | Batch commits + SHA verify + abort |
+| **6** | `src/background/migration/executor.ts` | **NEW** | Batch executor + resume + lock heartbeat |
+| **6.5** | `src/background/migration/rollback.ts` | **NEW** | Reverse batch commits |
+| **7** | `src/background/migration/logger.ts` | **NEW** | Structured telemetry |
+| **8** | `src/utils/constants.ts` | MODIFY | 13 new message types |
+| **8** | `src/background/index.ts` | MODIFY | Message handlers |
+| **8** | `src/background/migration/index.ts` | **NEW** | Barrel + orchestrator |
+| **8** | `src/popup/App.tsx` | MODIFY | 6-screen migration UI |
+| **8** | `src/popup/styles.css` | MODIFY | Migration styles |
+| **8** | `src/background/sync-engine.ts` | MODIFY | Layout-aware syncing |
+
+**Total: 11 new files, 14 modified files, 10 phases.**
+
+---
+
+## Edge Cases Addressed (23 total)
+
+| # | Edge Case | Phase | File |
+|---|-----------|-------|------|
+| 1 | Metadata caching (7-day TTL) | 4 | `metadata-fetcher.ts` |
+| 2 | API retry + exponential backoff | 2, 5.5 | `github-api.ts`, `safety.ts` |
+| 3 | GitHub rate-limit pause/resume | 2, 5.5 | `github-api.ts`, `safety.ts` |
+| 4 | Transaction safety (atomic batch commits) | 5.5 | `safety.ts` |
+| 5 | AbortController cancellation | 5.5 | `safety.ts` |
+| 6 | Repository validation (10 checks) | 0 | `validator.ts` |
+| 7 | Duplicate detection | 4 | `scanner.ts` |
+| 8 | Folder sanitization | 5 | `folder-strategy.ts` |
+| 9 | Version compatibility (V1→V2→V3) | 6.5 | `rollback.ts` |
+| 10 | Telemetry / debug logs | 7 | `logger.ts` |
+| 11 | Pre-migration validation | 0 | `validator.ts` |
+| 12 | Rollback support | 6.5 | `rollback.ts` |
+| 13 | Dry-run estimation | 5 | `planner.ts` |
+| 14 | Batch performance (Git Data API) | 2, 5.5, 6 | `github-api.ts`, `safety.ts`, `executor.ts` |
+| 15 | LeetHub v2 flat-at-root layout | 3, 4 | `detect-layout.ts`, `scanner.ts` |
+| 16 | Protected root files | 1, 6 | `migration.ts`, `executor.ts` |
+| 17 | README never used as metadata source | 4 | `metadata-fetcher.ts` |
+| 18 | Multi-topic resolution | 5 | `folder-strategy.ts` |
+| **19** | **Git Data API atomic commits** | **2, 5.5, 6** | **`github-api.ts`, `safety.ts`, `executor.ts`** |
+| **20** | **Migration lock (concurrent prevention)** | **0** | **`validator.ts`** |
+| **21** | **Blob SHA verification** | **5.5** | **`safety.ts`** |
+| **22** | **Feature flags in leetsync.json** | **1, 6** | **`migration.ts`, `executor.ts`** |
+| **23** | **Post-migration stats regeneration prompt** | **8** | **`App.tsx`** |
+
+---
+
+## Execution Order
+
+```
+Phase 0  → Validator + Migration Lock
+Phase 1  → Types & Config
+Phase 2  → GitHub API (Git Data API + Retry + Rate Limits)
+Phase 3  → Layout Detector (3 formats)
+Phase 4  → Scanner + Metadata Resolver (4-source chain)
+Phase 5  → Planner + Batch Grouping + Dry-Run Estimate
+Phase 5.5 → Safety: Atomic Batch Commits + SHA Verify + Abort
+Phase 6  → Executor with Batch Resume + Lock Heartbeat
+Phase 6.5 → Rollback (reverse batch commits)
+Phase 7  → Telemetry Logger
+Phase 8  → UI (6 screens) + Message Wiring + Stats Regeneration
+```
+
+Build and verify after each phase. You review before I proceed.

@@ -215,6 +215,9 @@ export class LeetCodeSubmissionProvider implements SubmissionProvider {
             title
             titleSlug
             difficulty
+            topicTags {
+              name
+            }
           }
         }
       }
@@ -250,7 +253,7 @@ export class LeetCodeSubmissionProvider implements SubmissionProvider {
         title: details.question?.title || titleSlug,
         titleSlug: details.question?.titleSlug || titleSlug,
         difficulty: (details.question?.difficulty as any) || 'Medium',
-        tags: [],
+        tags: (details.question?.topicTags || []).map((t: any) => t.name) || [],
         language: details.lang?.name || 'cpp',
         code: details.code,
         runtime: details.runtime || 'N/A',

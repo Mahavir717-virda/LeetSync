@@ -154,9 +154,10 @@
       sub.code &&
       sub.language &&
       sub.status &&
-      sub.questionNumber > 0 &&
+      (sub.titleSlug || sub.title) &&
       sub.difficulty &&
-      sub.tags && sub.tags.length > 0
+      sub.questionNumber &&
+      sub._metadataFetched
     );
   }
 
@@ -169,6 +170,16 @@
       clearTimeout(submissionTimeouts.get(submissionId)!);
       submissionTimeouts.delete(submissionId);
     }
+
+    // Auto-extract questionNumber from title if missing (e.g. "3996. Even Number of Knight Moves")
+    if (!sub.questionNumber || sub.questionNumber === 0) {
+      if (sub.title) {
+        const titleMatch = sub.title.match(/^(\d+)\./);
+        if (titleMatch) {
+          sub.questionNumber = parseInt(titleMatch[1], 10);
+        }
+      }
+    }
     
     console.log(`[LeetSync] Submission captured successfully${isPartial ? ' (PARTIAL METADATA)' : ''}:`, sub);
     window.postMessage({ type: 'LEETSYNC_SUBMISSION', data: sub }, '*');
@@ -177,19 +188,30 @@
   function mergeAndSendSubmission(submissionId: string, partialData: any) {
     if (seenSubmissions.has(submissionId)) return;
 
-    let sub = pendingSubmissions.get(submissionId) || { submissionId, tags: [], url: window.location.href };
+    let sub = pendingSubmissions.get(submissionId) || { submissionId, tags: [], url: window.location.href, _metadataFetched: false };
     
-    // Intelligently merge non-empty values
+    // Merge non-empty values
     for (const key of Object.keys(partialData)) {
       const val = partialData[key];
       if (val !== undefined && val !== null && val !== '') {
-        // For tags, only merge if it's an array and not empty
-        if (key === 'tags') {
-          if (Array.isArray(val) && val.length > 0) {
-            sub[key] = val;
-          }
-        } else {
-          sub[key] = val;
+        sub[key] = val;
+      }
+    }
+
+    // If metadata explicitly provided by GraphQL, mark as fetched
+    if (partialData.tags !== undefined || partialData.difficulty !== undefined) {
+      sub._metadataFetched = true;
+    }
+
+    // Default optional fields so missing metadata never blocks sync permanently, but we wait for it first
+    sub.tags = Array.isArray(sub.tags) ? sub.tags : [];
+    
+    // Auto-extract questionNumber from title if missing
+    if (!sub.questionNumber || sub.questionNumber === 0) {
+      if (sub.title) {
+        const titleMatch = sub.title.match(/^(\d+)\./);
+        if (titleMatch) {
+          sub.questionNumber = parseInt(titleMatch[1], 10);
         }
       }
     }
@@ -197,43 +219,47 @@
     pendingSubmissions.set(submissionId, sub);
     console.log(`[LeetSync Debug] Merged submission state for ${submissionId}:`, sub);
 
-    // Setup a 5-second timeout fallback if this is the first time we see this submission
-    if (!submissionTimeouts.has(submissionId)) {
-      const timeout = setTimeout(() => {
-        if (!seenSubmissions.has(submissionId)) {
-          console.warn(`[LeetSync] GraphQL metadata missing after 8 seconds for ${submissionId}. Syncing with partial metadata.`);
-          // If we have at least the basic fields, send it
-          if (sub.code && sub.status && sub.language) {
-            dispatchSubmission(submissionId, sub, true);
-          }
-        }
-      }, 8000);
-      submissionTimeouts.set(submissionId, timeout);
-    }
-    
-    // Actively trigger a fetch if we are missing rich metadata and haven't fetched yet
-    if (!sub.difficulty || !sub.tags || sub.tags.length === 0) {
-      const slug = sub.titleSlug || extractSlugFromPage();
-      if (slug && !activeFetches.has(submissionId)) {
-        activeFetches.add(submissionId);
-        fetchProblemMetadata(slug, submissionId);
-      }
-    }
-
+    // INSTANT DISPATCH: If all required fields are present, dispatch immediately!
     if (isSubmissionReady(sub)) {
       dispatchSubmission(submissionId, sub, false);
-    } else {
-      console.log(
-        `[LeetSync Debug] Waiting for more data for ${submissionId}...\n` +
-        `Missing:\n` +
-        `${sub.code ? '✓' : '✗'} code\n` +
-        `${sub.language ? '✓' : '✗'} language\n` +
-        `${sub.status ? '✓' : '✗'} status\n` +
-        `${sub.questionNumber > 0 ? '✓' : '✗'} questionNumber\n` +
-        `${sub.difficulty ? '✓' : '✗'} difficulty\n` +
-        `${sub.tags && sub.tags.length > 0 ? '✓' : '✗'} tags`
-      );
+      return;
     }
+
+    // Trigger metadata fetch if we have a slug but haven't fetched metadata yet
+    if (!sub._metadataFetched && sub.titleSlug && !sub._isFetchingMetadata) {
+      sub._isFetchingMetadata = true;
+      fetchProblemMetadata(sub.titleSlug, submissionId);
+    }
+
+    // Set a safety timeout to sync with partial data if metadata never arrives (e.g. 8 seconds)
+    if (!submissionTimeouts.has(submissionId)) {
+      submissionTimeouts.set(submissionId, setTimeout(() => {
+        if (!seenSubmissions.has(submissionId)) {
+          console.warn(`[LeetSync] GraphQL metadata missing after 8 seconds. Syncing with partial metadata.`);
+          // Provide defaults for missing critical fields so backend doesn't crash
+          sub.difficulty = sub.difficulty || 'Medium';
+          sub.questionNumber = sub.questionNumber || 0;
+          dispatchSubmission(submissionId, sub, true);
+        }
+      }, 8000));
+    }
+
+    console.log(
+      `[LeetSync Debug] Waiting for required fields for ${submissionId}...\n` +
+      `Required:\n` +
+      `${sub.code ? '✓' : '✗'} code\n` +
+      `${sub.language ? '✓' : '✗'} language\n` +
+      `${sub.status ? '✓' : '✗'} status\n` +
+      `${sub.title || sub.titleSlug ? '✓' : '✗'} title\n` +
+      `${sub.questionNumber ? '✓' : '✗'} questionNumber\n` +
+      `${sub.difficulty ? '✓' : '✗'} difficulty\n` +
+      `${sub._metadataFetched ? '✓' : '✗'} tags/metadata`
+    );
+  }
+
+  function getCsrfToken(): string {
+    const match = document.cookie.match(/csrftoken=([^;]+)/);
+    return match ? match[1] : '';
   }
 
   async function fetchProblemMetadata(titleSlug: string, submissionId: string) {
@@ -241,10 +267,11 @@
     
     console.log(`[LeetSync] Actively fetching missing metadata for ${titleSlug}...`);
     try {
-      const response = await fetch('https://leetcode.com/graphql/', {
+      const response = await fetch('/graphql/', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-csrftoken': getCsrfToken()
         },
         body: JSON.stringify({
           query: `
@@ -320,6 +347,7 @@
       memory: data.status_memory ?? '',
       memoryPercentile: data.memory_percentile ?? 0,
       timestamp: new Date().toISOString(),
+      contestName: extractContestNameFromPage(),
     });
   }
 
@@ -364,6 +392,7 @@
       timestamp: details.timestamp
         ? new Date(details.timestamp * 1000).toISOString()
         : new Date().toISOString(),
+      contestName: extractContestNameFromPage(),
     });
   }
 
@@ -418,6 +447,36 @@
     if (docTitleMatch) return parseInt(docTitleMatch[1], 10);
 
     return 0;
+  }
+
+  /**
+   * Extract active contest title using URL inspection, breadcrumbs, or navigation storage.
+   */
+  function extractContestNameFromPage(): string | null {
+    try {
+      // Method 1: Check URL for /contest/weekly-contest-463/ or /contest/biweekly-contest-165/
+      const urlMatch = window.location.pathname.match(/\/contest\/([^\/]+)/);
+      if (urlMatch?.[1]) {
+        const raw = urlMatch[1];
+        try { sessionStorage.setItem('leetsync_last_contest', raw); } catch (_) {}
+        return raw;
+      }
+
+      // Method 2: Check DOM breadcrumbs / contest heading links
+      const contestLinks = document.querySelectorAll('a[href*="/contest/"]');
+      for (const link of Array.from(contestLinks)) {
+        const text = link.textContent?.trim();
+        if (text && (/weekly/i.test(text) || /biweekly/i.test(text) || /contest/i.test(text))) {
+          return text;
+        }
+      }
+
+      // Method 4: Stored contest context fallback
+      const stored = sessionStorage.getItem('leetsync_last_contest');
+      if (stored) return stored;
+    } catch (_) {}
+
+    return null;
   }
 
   console.log('[LeetSync] Main world network interceptor active');

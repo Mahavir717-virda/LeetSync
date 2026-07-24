@@ -38,7 +38,7 @@ export interface LeetSyncSettings {
 
 export type SyncMode = 'accepted_only' | 'all_submissions';
 
-export type FolderStructure = 'Flat' | 'Topic' | 'Difficulty' | 'Topic/Difficulty';
+export type FolderStructure = 'Flat' | 'Topic' | 'Difficulty' | 'Topic/Difficulty' | 'Contest';
 
 export interface StreakData {
   current: number;

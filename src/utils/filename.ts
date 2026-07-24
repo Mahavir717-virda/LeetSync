@@ -89,7 +89,7 @@ const LANGUAGE_FOLDER_MAP: Record<string, string> = {
  * "java"    → "java"
  */
 export function getLanguageFolder(language: string): string {
-  return LANGUAGE_FOLDER_MAP[language?.toLowerCase()] ?? language?.toLowerCase() ?? 'unknown';
+  return LANGUAGE_FOLDER_MAP[language?.toLowerCase()] ?? language?.toLowerCase() ?? 'other';
 }
 
 // ─── Filename Generation ───────────────────────────────────────────────────────
@@ -154,7 +154,7 @@ export function generateVersionedFilename(
   language: string
 ): string {
   const safeDatetime = formatTimestampForFilename(timestamp);
-  const safeStatus = status?.toLowerCase().replace(/\s+/g, '-') || 'unknown';
+  const safeStatus = status?.toLowerCase().replace(/\s+/g, '-') || 'completed';
   const ext = getLanguageExtension(language);
   return `v${version}_${safeDatetime}_${safeStatus}${ext}`;
 }
@@ -188,7 +188,7 @@ export function buildSubmissionPath(
   if (flat) {
     return `${baseDirectory}/${filename}`;
   }
-  const langFolder = getLanguageName(language)?.toLowerCase().replace(/[^a-z0-9+#]/g, '').replace(/\+/g, 'plus').replace(/#/g, 'sharp') || 'unknown';
+  const langFolder = getLanguageName(language)?.toLowerCase().replace(/[^a-z0-9+#]/g, '').replace(/\+/g, 'plus').replace(/#/g, 'sharp') || 'other';
   return `${baseDirectory}/${langFolder}/${filename}`;
 }
 
@@ -310,3 +310,20 @@ export function difficultyBadge(difficulty?: string): string {
     default:       return '⚪';
   }
 }
+
+/**
+ * Robust URL pathname slug extractor.
+ * Splits pathname and finds the segment directly after '/problems/'.
+ * Example: "/problems/two-sum/description/" → "two-sum"
+ */
+export function extractSlugFromUrl(urlPath?: string): string | null {
+  const pathname = urlPath || (typeof location !== 'undefined' ? location.pathname : '');
+  if (!pathname) return null;
+  const parts = pathname.split('/').filter(Boolean);
+  const idx = parts.indexOf('problems');
+  if (idx !== -1 && parts[idx + 1]) {
+    return parts[idx + 1].toLowerCase();
+  }
+  return null;
+}
+

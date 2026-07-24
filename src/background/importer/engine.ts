@@ -13,8 +13,10 @@ import { getImportSession, saveImportSession, clearImportSession, createNewSessi
 import { getSettings } from '@/utils/storage';
 import { githubApi } from '../github-api';
 import { generateProblemReadme } from '@/generators/readme';
-import { createManifest } from '@/generators/manifest';
+import { createManifest, updateManifest, buildSolution } from '@/generators/manifest';
 import { migrationLogger } from '../migration/logger';
+import { getProblemDirectory } from '@/utils/folder-strategy';
+import { buildLanguageScopedPath, buildManifestPath, buildReadmePath, DEFAULT_SOLUTION_LABEL } from '@/utils/filename';
 
 export class ImportEngine {
   private provider: SubmissionProvider;
@@ -88,6 +90,8 @@ export class ImportEngine {
     this.session.status = 'discovering';
     await saveImportSession(this.session);
 
+    const settings = await getSettings();
+
     // 1. Discover summaries
     const summaries = await this.provider.discoverSubmissions((count) => {
       if (this.session) {
@@ -101,7 +105,7 @@ export class ImportEngine {
 
     // 2. Build import plan
     const existingPaths = new Set<string>(); // Future: pull from GitHub tree
-    const actions = buildImportPlan(summaries, existingPaths, strategy);
+    const actions = buildImportPlan(summaries, existingPaths, strategy, settings.folderStructure || 'Topic/Difficulty');
 
     this.session.actions = actions;
     this.session.status = 'downloading';
@@ -163,6 +167,13 @@ export class ImportEngine {
           item.difficulty = detail.difficulty;
           item.state = ImportState.DOWNLOADED;
 
+          const baseDirectory = getProblemDirectory(detail, settings.folderStructure || 'Topic/Difficulty', detail.language);
+          const solutionPath = buildLanguageScopedPath(baseDirectory, detail.language, DEFAULT_SOLUTION_LABEL);
+          const manifestPath = buildManifestPath(baseDirectory);
+          const readmePath = buildReadmePath(baseDirectory);
+
+          item.targetPath = solutionPath;
+
           const preview = (detail.code || '').slice(0, 150).trim();
           migrationLogger.log('info', 'Import', `Fetched #${item.submissionId} (${item.title}): ${detail.language} (${detail.code?.length ?? 0} bytes)`);
 
@@ -180,15 +191,16 @@ export class ImportEngine {
           await saveImportSession(session);
 
           // Build solution code file
-          filesToCommit.push({ path: item.targetPath, content: detail.code });
+          filesToCommit.push({ path: solutionPath, content: detail.code });
 
           // Build problem manifest and README
-          const manifest = createManifest(detail);
-          const readmeContent = generateProblemReadme(manifest);
-          filesToCommit.push({ path: `problems/${item.titleSlug}/README.md`, content: readmeContent });
-          filesToCommit.push({ path: `problems/${item.titleSlug}/manifest.json`, content: JSON.stringify(manifest, null, 2) });
+          let manifest = createManifest(detail);
+          const defaultSolution = buildSolution(detail, DEFAULT_SOLUTION_LABEL, solutionPath, true, 'historical_import');
+          manifest = updateManifest(manifest, defaultSolution, 'first_save');
 
-          item.state = ImportState.UPLOADING;
+          const readmeContent = generateProblemReadme(manifest);
+          filesToCommit.push({ path: readmePath, content: readmeContent });
+          filesToCommit.push({ path: manifestPath, content: JSON.stringify(manifest, null, 2) });
         } catch (err: any) {
           console.warn(`[ImportEngine] Failed to download ${item.title}:`, err);
           migrationLogger.log('error', 'Import', `Error downloading #${item.submissionId} (${item.title}): ${err.message}`);

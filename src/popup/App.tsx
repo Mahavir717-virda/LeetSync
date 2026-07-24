@@ -8,8 +8,6 @@ import { AuthView } from './components/views/AuthView';
 import { DashboardView } from './components/views/DashboardView';
 import { MigrationView } from './components/views/MigrationView';
 import { ImportView } from './components/views/ImportView';
-import { LogsView } from './components/views/LogsView';
-import { StatsView } from './components/views/StatsView';
 import { SettingsView } from './components/views/SettingsView';
 import { ToastContainer, useToast } from './components/ui/dialogs';
 
@@ -33,7 +31,7 @@ function sendMessage<T = any>(type: MessageType | string, payload?: any): Promis
 }
 
 export function App() {
-  const [view, setView] = useState<'loading' | 'auth' | 'dashboard' | 'migration' | 'import' | 'logs' | 'stats' | 'settings'>('loading');
+  const [view, setView] = useState<'loading' | 'auth' | 'dashboard' | 'migration' | 'import' | 'settings'>('loading');
   const [viewportMode, setViewportMode] = useState<ViewportMode>('popup');
   const [authenticated, setAuthenticated] = useState(false);
   const [settings, setSettings] = useState<LeetSyncSettings>(DEFAULT_SETTINGS);
@@ -206,8 +204,6 @@ export function App() {
             repoName={repoName}
             autoSync={settings.autoSync}
             recentSyncs={recentSyncs}
-            streakDays={settings.streak?.current ?? 14}
-            totalSynced={recentSyncs.length > 0 ? recentSyncs.length : 342}
             onToggleAutoSync={handleToggleAutoSync}
             onNavigate={(v) => setView(v as any)}
             addToast={addToast}
@@ -225,15 +221,6 @@ export function App() {
             repoName={repoName}
             onNavigate={(v) => setView(v as any)}
             addToast={addToast}
-          />
-        ) : view === 'logs' ? (
-          <LogsView
-            onNavigate={(v) => setView(v as any)}
-          />
-        ) : view === 'stats' ? (
-          <StatsView
-            recentSyncs={recentSyncs}
-            onNavigate={(v) => setView(v as any)}
           />
         ) : view === 'settings' ? (
           <SettingsView

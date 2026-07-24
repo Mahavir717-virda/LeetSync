@@ -26,6 +26,7 @@ import {
 } from '@/generators/manifest';
 import { resolveUniqueLabel } from './label-resolver';
 import { addToQueue, acquireLock, releaseLock } from './queue';
+import { fetchLeetCodeMetadata } from './migration/metadata-fetcher';
 
 // ─── Conflict Resolution Helpers ──────────────────────────────────────────────
 
@@ -134,6 +135,26 @@ export async function syncSubmission(
 
   try {
     console.log(`[LeetSync Sync] 🚀 Starting sync for: "${submission.title}" (${submission.language})`);
+
+    // Enrich missing topic tags or difficulty from LeetCode GraphQL before constructing baseDirectory
+    if ((!submission.tags || submission.tags.length === 0 || !submission.difficulty) && submission.titleSlug) {
+      try {
+        const meta = await fetchLeetCodeMetadata(submission.titleSlug);
+        if (meta) {
+          if (Array.isArray(meta.topicTags) && meta.topicTags.length > 0) {
+            submission.tags = meta.topicTags;
+          }
+          if (meta.difficulty) {
+            submission.difficulty = meta.difficulty;
+          }
+          if (meta.questionNumber && (!submission.questionNumber || submission.questionNumber === 0)) {
+            submission.questionNumber = meta.questionNumber;
+          }
+        }
+      } catch (err) {
+        console.warn('[LeetSync Sync] Could not fetch GraphQL metadata for tags:', err);
+      }
+    }
 
     const baseDirectory = getProblemDirectory(submission, folderStructure, submission.language);
 
@@ -264,6 +285,27 @@ export async function syncSubmission(
     });
 
     console.log(`[LeetSync Sync] ✅ Synced: ${problemDisplay} — "${resolvedLabel}" (${getLanguageName(submission.language)})`);
+
+    // Notify active LeetCode tab to trigger in-page celebration overlay
+    try {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]?.id) {
+          chrome.tabs.sendMessage(tabs[0].id, {
+            type: 'SYNC_COMPLETED',
+            payload: {
+              problemTitle: submission.title,
+              problemSlug: submission.titleSlug,
+              commitSha: newCommitSha,
+              repoOwner: owner,
+              repoName: repo,
+              difficulty: submission.difficulty,
+              language: submission.language,
+            },
+          }).catch(() => {});
+        }
+      });
+    } catch (_) {}
+
     return { success: true };
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : 'Unknown sync error';

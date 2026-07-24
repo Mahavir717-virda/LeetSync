@@ -43,6 +43,8 @@ export interface LeetCodeSubmission {
   timestamp: string;
   /** LeetCode problem URL */
   url: string;
+  /** Optional contest title if submission originates from a contest (e.g. "Weekly Contest 463") */
+  contestName?: string | null;
 }
 
 export type SubmissionStatus =

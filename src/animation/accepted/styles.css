@@ -1,0 +1,151 @@
+/* LeetSync Premium Flying Golden Trophy Celebration Animation Styles */
+
+:root {
+  --ls-bg-backdrop: rgba(10, 10, 18, 0.78);
+  --ls-card-bg: rgba(22, 22, 34, 0.92);
+  --ls-card-border: rgba(16, 185, 129, 0.4);
+  --ls-card-glow: rgba(16, 185, 129, 0.25);
+  --ls-text-primary: #FFFFFF;
+  --ls-text-muted: #9CA3AF;
+  --ls-accent-green: #10B981;
+  --ls-accent-blue: #3B82F6;
+  --ls-ease-out-expo: cubic-bezier(.22, 1, .36, 1);
+}
+
+/* Fullscreen Overlay Container (0 ms) */
+#leetsync-accepted-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 99999999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ls-bg-backdrop);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  opacity: 0;
+  pointer-events: none;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+  transition: opacity 0.3s var(--ls-ease-out-expo);
+  will-change: opacity;
+}
+
+#leetsync-accepted-overlay.ls-active {
+  opacity: 1;
+}
+
+#leetsync-accepted-overlay.ls-fading {
+  opacity: 0;
+}
+
+/* Central Glassmorphic Card (150 ms) */
+.ls-accepted-card {
+  position: relative;
+  width: 320px;
+  background: var(--ls-card-bg);
+  border: 1px solid var(--ls-card-border);
+  border-radius: 24px;
+  padding: 28px 24px 26px;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.7), 0 0 45px var(--ls-card-glow);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  color: var(--ls-text-primary);
+  opacity: 0;
+  transform: translateY(20px) scale(0.85);
+  will-change: transform, opacity;
+  transition: transform 0.45s var(--ls-ease-out-expo), opacity 0.4s var(--ls-ease-out-expo);
+}
+
+.ls-accepted-card.ls-card-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.ls-accepted-card.ls-card-pulse {
+  animation: lsSparklePulse 0.5s var(--ls-ease-out-expo);
+}
+
+@keyframes lsSparklePulse {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.03); }
+  100% { transform: scale(1); }
+}
+
+/* Flying Golden Trophy Container (350 ms) */
+.ls-lottie-container {
+  position: relative;
+  width: 170px;
+  height: 170px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+  opacity: 0;
+  transform: translateY(50px) scale(0.3) rotate(-15deg);
+  will-change: transform, opacity;
+  transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.4s ease;
+}
+
+.ls-lottie-container.ls-trophy-fly-in {
+  opacity: 1;
+  transform: translateY(0) scale(1) rotate(0deg);
+}
+
+.ls-lottie-container svg {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain;
+}
+
+/* Typography */
+.ls-accepted-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: #FFFFFF;
+  margin: 0 0 6px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.ls-accepted-subtitle {
+  font-size: 13px;
+  color: var(--ls-text-muted);
+  margin: 0 0 18px;
+  font-weight: 500;
+}
+
+/* GitHub Sync Badge (700 ms) */
+.ls-github-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #34D399;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 20px;
+  border-radius: 20px;
+  opacity: 0;
+  transform: translateY(30px);
+  transition: transform 0.4s var(--ls-ease-out-expo), opacity 0.35s var(--ls-ease-out-expo);
+  will-change: transform, opacity;
+}
+
+.ls-github-badge.ls-badge-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* Reduced Motion Override */
+@media (prefers-reduced-motion: reduce) {
+  #leetsync-accepted-overlay,
+  .ls-accepted-card,
+  .ls-lottie-container,
+  .ls-github-badge {
+    transition-duration: 0.05s !important;
+    animation: none !important;
+  }
+}

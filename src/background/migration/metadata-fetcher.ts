@@ -45,19 +45,26 @@ export async function fetchLeetCodeMetadata(slug: string): Promise<ProblemMetada
     const q = json?.data?.question;
     if (!q) return null;
 
-    const topicTags = Array.isArray(q.topicTags) ? q.topicTags.map((t: any) => t.name) : [];
-    const difficulty = (['Easy', 'Medium', 'Hard'].includes(q.difficulty) ? q.difficulty : 'Easy') as 'Easy' | 'Medium' | 'Hard';
+    const rawDifficulty = q.difficulty ?? q.questionDifficulty ?? q.stats?.difficulty;
+    const difficulty = (['Easy', 'Medium', 'Hard'].includes(rawDifficulty) ? rawDifficulty : 'Medium') as 'Easy' | 'Medium' | 'Hard';
+    const topicTags = Array.isArray(q.topicTags) && q.topicTags.length > 0
+      ? q.topicTags.map((t: any) => typeof t === 'string' ? t : (t?.name || t?.slug || '')).filter(Boolean)
+      : [];
+    const resolvedSlug = q.titleSlug || slug;
+    const resolvedTitle = q.title || slug;
+    const questionNumber = parseInt(q.questionFrontendId || q.questionId || '0', 10);
 
     return {
-      slug: q.titleSlug || slug,
-      title: q.title || slug,
-      questionNumber: parseInt(q.questionFrontendId || '0', 10),
+      slug: resolvedSlug,
+      title: resolvedTitle,
+      questionNumber,
       difficulty,
       topicTags,
       fetched: true,
       source: 'leetcode',
     };
-  } catch {
+  } catch (err) {
+    console.warn('[LeetSync Metadata Fetcher] GraphQL fetch exception for slug:', slug, err);
     return null;
   }
 }
